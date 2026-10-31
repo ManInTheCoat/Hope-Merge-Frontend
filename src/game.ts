@@ -1,6 +1,6 @@
 import * as THREE from 'three'
-import { fetchAssetBlob, fetchManifest, fetchMe, fetchRoomText, logout } from './network/api'
-import { CloseCode, type Door, type ErrorBody, type Exhibit, type Manifest } from './network/contract'
+import { fetchAssetBlob, fetchGenerations, fetchManifest, fetchMe, fetchRoomText, logout } from './network/api'
+import { CloseCode, type Door, type ErrorBody, type Exhibit, type Guide, type Manifest } from './network/contract'
 import { GameSocket } from './network/ws'
 import { PlayerRegistry } from './players/registry'
 import { RemotePlayersView } from './players/view'
@@ -8,9 +8,12 @@ import { moveCylinder, type Vec2 } from './scene/collision'
 import { FirstPersonControls, typingInField } from './scene/controls'
 import { CLIENT_SPEED_FACTOR, moveVector, shouldSendMove } from './scene/input'
 import { buildRoom, type BuiltRoom } from './scene/roomBuilder'
-import { pickDoor, pickExhibit } from './scene/targeting'
+import { pickDoor, pickTarget, type Target } from './scene/targeting'
 import { createChat } from './ui/chat'
 import { chatKeyAction, chatLineText } from './ui/chatLog'
+import { askErrorText, GuideAsks } from './ui/guideAsks'
+import { panelKeyAction } from './ui/guideKeys'
+import { createGuidePanel } from './ui/guidePanel'
 import { createHud } from './ui/hud'
 import { createLoginScreen } from './ui/login'
 import { AssetBudget } from './world/AssetBudget'
@@ -21,6 +24,9 @@ const MOVE_SEND_INTERVAL_MS = 100
 const MAX_FRAME_DT = 0.1
 const MIN_MOVE_GAP_MS = 50
 const CHAT_SEND_TIMEOUT_MS = 10_000
+/** Без guide.accepted или error за это время снимаем вопрос и возвращаем текст в поле. */
+const ASK_ACCEPT_TIMEOUT_MS = 10_000
+const GUIDE_CANCEL_TIMEOUT_MS = 10_000
 /** Без world.entered за это время считаем подтверждение потерянным и переподключаемся (api.md, «Переход»). */
 const ENTER_TIMEOUT_MS = 10_000
 /** Подпись на затемнении появляется, только если зал грузится дольше этого. */
@@ -35,6 +41,7 @@ type Session = {
   budgetOff: (() => void) | null
   built: BuiltRoom | null
   exhibits: Exhibit[]
+  guides: Guide[]
   doors: Door[]
   pos: Vec2
   epoch: number
@@ -88,14 +95,14 @@ export async function startGame(host: HTMLElement): Promise<void> {
   let session: Session | null = null
   let cardFor: Exhibit | null = null
   let cardToken = 0
-  let target: Exhibit | null = null
+  let target: Target = null
   let doorTarget: Door | null = null
 
   const view = new RemotePlayersView(scene)
 
   const controls = new FirstPersonControls(renderer.domElement, (locked) => {
     const s = session
-    hud.showClickOverlay(!locked && !!s?.ready && !chat.isOpen, () => controls.lock())
+    hud.showClickOverlay(!locked && !!s?.ready && !chat.isOpen && !guidePanel.isOpen, () => controls.lock())
     if (!locked) closeCard()
   })
   controls.enabled = false
@@ -110,15 +117,68 @@ export async function startGame(host: HTMLElement): Promise<void> {
         throw new Error(chatErrorText(e))
       }
     },
-    onClose: (sent) => afterChatClosed(sent),
+    onClose: (sent) => resumeControls(sent),
   })
 
-  function afterChatClosed(sent: boolean) {
+  const asks = new GuideAsks()
+  const guidePanel = createGuidePanel(host, {
+    asks,
+    loadPage: (guideId, before) => fetchGenerations(guideId, before, session?.ac.signal),
+    onAsk(guide, text) {
+      const s = session
+      if (!s?.ready || !s.socket?.isOpen) return 'Нет связи с сервером'
+      sendMove(s, true) // сервер меряет расстояние до гида по своей позиции
+      const requestId = s.socket.send('guide.ask', { guide_id: guide.id, text })
+      if (!requestId) return 'Нет связи с сервером'
+      asks.start({ requestId, guideId: guide.id, guideName: guide.display_name, question: text })
+      setTimeout(() => {
+        if (session === s) askFailed(requestId, 'Сервер не ответил, попробуйте ещё раз')
+      }, ASK_ACCEPT_TIMEOUT_MS)
+      return null
+    },
+    async onCancel() {
+      const socket = session?.socket
+      const generationId = asks.active?.generationId
+      if (!generationId) return
+      if (!socket?.isOpen) throw new Error('Нет связи с сервером')
+      try {
+        await socket.request('guide.cancel', { generation_id: generationId }, 'guide.cancelled', GUIDE_CANCEL_TIMEOUT_MS)
+      } catch (e) {
+        throw new Error(e instanceof Error ? chatErrorText(e) : askErrorText(e as Partial<ErrorBody>))
+      }
+    },
+    onClose: () => resumeControls(true),
+  })
+
+  /**
+   * Вопрос не принят. Текст возвращаем в поле, только если открыт тот же гид: иначе Enter отправил бы его
+   * другому гиду. В остальных случаях — сообщение поверх игры.
+   */
+  function askFailed(requestId: string, text: string) {
+    const r = asks.rejected(requestId)
+    if (!r) return
+    if (guidePanel.guideId === r.guideId) guidePanel.showError(text, r.question)
+    else hud.showMessage(`Вопрос гиду не отправлен: ${text}`)
+  }
+
+  /** Общий чат или диалог закрыт: управление снова доступно; `lock` — сразу захватить мышь. */
+  function resumeControls(lock: boolean) {
     const ready = !!session?.ready
     controls.enabled = ready
     // Оверлей нужен на случай, если захват не удастся; при успехе pointerlockchange его скроет.
     hud.showClickOverlay(ready && !controls.locked, () => controls.lock())
-    if (sent && ready) controls.lock()
+    if (lock && ready) controls.lock()
+  }
+
+  function openGuide(s: Session, guide: Guide) {
+    sendMove(s, true) // серверная позиция должна быть свежей, иначе у границы 3 м придёт OUT_OF_RANGE
+    hud.showHint(null)
+    controls.enabled = false
+    controls.keys.clear()
+    hud.showClickOverlay(false)
+    // Панель открываем до снятия захвата: обработчик pointerlockchange должен видеть её открытой.
+    guidePanel.open(guide)
+    if (controls.locked) document.exitPointerLock()
   }
 
   const loginScreen = createLoginScreen(host, () => void connect())
@@ -154,16 +214,31 @@ export async function startGame(host: HTMLElement): Promise<void> {
 
   document.addEventListener('keydown', (e) => {
     if (e.repeat) return
+    // Фокус вне панели (клик мимо поля): E всё равно закрывает диалог.
+    // Нажатие E, открывшее панель, погашено в controls (defaultPrevented) и её не закрывает.
+    if (guidePanel.isOpen) {
+      const panelAction = panelKeyAction(e.code, {
+        typing: typingInField(),
+        inputDisabled: asks.active !== null,
+        opening: e.defaultPrevented,
+      })
+      if (panelAction) {
+        e.preventDefault()
+        guidePanel.close()
+        resumeControls(true)
+        return
+      }
+    }
     const action = chatKeyAction(e.code, {
       chatOpen: chat.isOpen,
       typing: typingInField(),
-      blocked: loginScreen.visible || !!cardFor || !session?.socket?.isOpen,
+      blocked: loginScreen.visible || !!cardFor || guidePanel.isOpen || !session?.socket?.isOpen,
     })
     if (!action) return
     e.preventDefault()
     if (action === 'close') {
       chat.close()
-      afterChatClosed(false)
+      resumeControls(false)
       return
     }
     chat.open()
@@ -208,6 +283,8 @@ export async function startGame(host: HTMLElement): Promise<void> {
     view.clear()
     chat.close()
     chat.clear()
+    guidePanel.close()
+    asks.reset()
     rooms?.unload()
     if (session === s) session = null
     controls.enabled = false
@@ -221,6 +298,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
   function showRoom(s: Session, loaded: LoadedRoom) {
     s.built = buildRoom(loaded.room, loaded.bitmaps)
     s.exhibits = loaded.room.exhibits
+    s.guides = loaded.room.guides
     s.doors = loaded.room.doors
     scene.add(s.built.group)
   }
@@ -228,8 +306,9 @@ export async function startGame(host: HTMLElement): Promise<void> {
   function becomeReady(s: Session) {
     s.ready = true
     s.moveTimer = setInterval(() => sendMove(s), MOVE_SEND_INTERVAL_MS)
-    controls.enabled = !chat.isOpen
-    if (!chat.isOpen) hud.showClickOverlay(!controls.locked, () => controls.lock())
+    const dialogOpen = chat.isOpen || guidePanel.isOpen
+    controls.enabled = !dialogOpen
+    if (!dialogOpen) hud.showClickOverlay(!controls.locked, () => controls.lock())
   }
 
   /** Движение, осмотр и переходы недоступны до нового world.ready. */
@@ -240,6 +319,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
     controls.enabled = false
     controls.keys.clear()
     closeCard()
+    guidePanel.close()
     hud.showHint(null)
     target = null
     doorTarget = null
@@ -279,7 +359,10 @@ export async function startGame(host: HTMLElement): Promise<void> {
     }
     manager.unload()
     s.exhibits = []
+    s.guides = []
     s.doors = []
+    // Переход отменил незавершённый вопрос на сервере (api.md §7): точное состояние даст история.
+    asks.reset()
 
     const { self, current_room } = entered
     s.roomId = current_room.room_id
@@ -339,6 +422,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
       budgetOff: null,
       built: null,
       exhibits: [],
+      guides: [],
       doors: [],
       pos: { x: 0, z: 0 },
       epoch: 0,
@@ -376,6 +460,11 @@ export async function startGame(host: HTMLElement): Promise<void> {
           text: chatLineText(text, photo !== null),
         }),
       )
+      socket.on('guide.accepted', ({ generation }, env) => asks.accepted(env.request_id ?? '', generation))
+      socket.on('guide.started', ({ generation_id }) => asks.started(generation_id))
+      socket.on('guide.delta', ({ generation_id, index, text }) => asks.delta(generation_id, index, text))
+      socket.on('guide.completed', ({ generation }) => asks.finished(generation))
+      socket.on('guide.failed', ({ generation }) => asks.finished(generation))
       socket.on('players.state', ({ players }) => {
         s.players.applyState(players, performance.now())
         const self = players.find((p) => p.user_id === s.selfId)
@@ -385,7 +474,8 @@ export async function startGame(host: HTMLElement): Promise<void> {
       })
       socket.on('error', (body, env) => {
         // Ошибки без request_id относятся к player.move: сервер отклонил структуру шага.
-        if (!env.request_id) console.warn('Сервер отклонил player.move:', body.code, body.message)
+        if (!env.request_id) return console.warn('Сервер отклонил player.move:', body.code, body.message)
+        askFailed(env.request_id, askErrorText(body))
       })
       socket.onClose((code) => {
         if (session !== s || s.ac.signal.aborted) return
@@ -443,7 +533,8 @@ export async function startGame(host: HTMLElement): Promise<void> {
       if (doorTarget) void enterDoor(s, doorTarget)
       return
     }
-    const exhibit = target
+    if (target.kind === 'guide') return openGuide(s, target.guide)
+    const exhibit = target.exhibit
     sendMove(s, true) // серверная позиция должна быть свежей, иначе у границы 3 м придёт OUT_OF_RANGE
     cardFor = exhibit
     const token = ++cardToken
@@ -487,10 +578,17 @@ export async function startGame(host: HTMLElement): Promise<void> {
         camera.getWorldDirection(dir)
         target = cardFor
           ? null
-          : pickExhibit({ eye: camera.position, dir, playerXZ: s.pos, colliders: s.built.colliders }, s.exhibits)
-        // Экспонат в прицеле важнее двери рядом.
+          : pickTarget({ eye: camera.position, dir, playerXZ: s.pos, colliders: s.built.colliders }, s.exhibits, s.guides)
+        // Экспонат или гид в прицеле важнее двери рядом.
         doorTarget = cardFor || target ? null : pickDoor(s.pos, s.doors)
-        const hint = target ? `E — осмотреть: ${target.title}` : doorTarget ? `E — перейти: ${doorTarget.label}` : null
+        const hint =
+          target?.kind === 'exhibit'
+            ? `E — осмотреть: ${target.exhibit.title}`
+            : target?.kind === 'guide'
+              ? `E — поговорить: ${target.guide.display_name}`
+              : doorTarget
+                ? `E — перейти: ${doorTarget.label}`
+                : null
         hud.showHint(!cardFor && controls.locked ? hint : null)
       }
       if (s.roomId) view.update(s.players, s.roomId, now, camera)

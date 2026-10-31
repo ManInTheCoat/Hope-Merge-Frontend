@@ -152,7 +152,17 @@ export function createMockServer(world: MockWorld): MockServer {
 
     const genMatch = path.match(/^\/guides\/([^/]+)\/generations$/)
     if (method === 'GET' && genMatch) {
-      return json(200, { items: generations.get(`${account.user.id}:${genMatch[1]}`) ?? [], next_before: null })
+      const all = generations.get(`${account.user.id}:${genMatch[1]}`) ?? []
+      const limit = Math.min(Math.max(Number(url.searchParams.get('limit') ?? 20) || 20, 1), 50)
+      const before = url.searchParams.get('before')
+      let end = all.length
+      if (before !== null) {
+        end = all.findIndex((g) => g.id === before)
+        if (end < 0) return httpError(400, 'INVALID_CURSOR', 'Неверный курсор')
+      }
+      const start = Math.max(end - limit, 0)
+      const items = all.slice(start, end)
+      return json(200, { items, next_before: start > 0 ? items[0].id : null })
     }
 
     if (method === 'POST' && path === '/photos') return createPhoto(req, account)
