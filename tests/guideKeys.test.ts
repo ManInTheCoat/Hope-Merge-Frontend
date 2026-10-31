@@ -3,13 +3,13 @@ import { panelKeyAction } from '../src/ui/guideKeys'
 
 const ctx = { typing: false, inputDisabled: false, opening: false }
 
-test('Esc закрывает панель без захвата мыши', () => {
-  expect(panelKeyAction('Escape', ctx)).toBe('close')
-  expect(panelKeyAction('Escape', { ...ctx, typing: true, inputDisabled: true })).toBe('close')
+test('Esc панель не закрывает: браузер не даст снова захватить мышь, игрок попал бы на затемнение', () => {
+  expect(panelKeyAction('Escape', ctx)).toBeNull()
+  expect(panelKeyAction('Escape', { ...ctx, typing: true })).toBeNull()
 })
 
-test('E вне поля закрывает и захватывает мышь', () => {
-  expect(panelKeyAction('KeyE', ctx)).toBe('close-lock')
+test('E вне поля закрывает панель', () => {
+  expect(panelKeyAction('KeyE', ctx)).toBe('close')
 })
 
 test('E в поле — это буква', () => {
@@ -20,8 +20,8 @@ test('нажатие E, которое открыло панель, её не з
   expect(panelKeyAction('KeyE', { ...ctx, opening: true })).toBeNull()
 })
 
-test('пока поле заблокировано ответом, E не закрывает: игрок начал набирать следующий вопрос', () => {
-  expect(panelKeyAction('KeyE', { ...ctx, inputDisabled: true })).toBeNull()
+test('пока гид отвечает и поле заблокировано, E закрывает: печатать всё равно нельзя', () => {
+  expect(panelKeyAction('KeyE', { ...ctx, inputDisabled: true })).toBe('close')
 })
 
 test('прочие клавиши ничего не делают', () => {

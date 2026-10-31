@@ -14,8 +14,8 @@ export type GuidePanelOptions = {
   onAsk(guide: Guide, text: string): string | null
   /** Отменить активный вопрос; промис отклоняется с текстом ошибки. */
   onCancel(): Promise<void>
-  /** Панель закрылась; `lock` — вернуть захват мыши (закрыли по E), иначе показать оверлей (Esc). */
-  onClose(lock: boolean): void
+  /** Панель закрыта игроком (E или ✕): вернуть управление и захват мыши. */
+  onClose(): void
 }
 
 export type GuidePanel = {
@@ -48,7 +48,13 @@ export function createGuidePanel(root: HTMLElement, opts: GuidePanelOptions): Gu
   const titles = el('div', 'guide-titles', head)
   const nameEl = el('div', 'guide-name', titles)
   const subtitleEl = el('div', 'guide-subtitle', titles)
-  el('div', 'guide-close-hint', head).textContent = 'Esc — закрыть'
+  const closeBox = el('div', 'guide-close', head)
+  el('span', 'guide-close-hint', closeBox).textContent = 'E — закрыть'
+  const closeBtn = el('button', 'guide-close-btn', closeBox)
+  closeBtn.type = 'button'
+  closeBtn.textContent = '✕'
+  closeBtn.title = 'Закрыть'
+  closeBtn.setAttribute('aria-label', 'Закрыть')
 
   const logEl = el('div', 'guide-log', box)
   const statusEl = el('div', 'guide-status', box)
@@ -230,11 +236,16 @@ export function createGuidePanel(root: HTMLElement, opts: GuidePanelOptions): Gu
     // Клавиши панели не должны доходить до игры и общего чата.
     e.stopPropagation()
     if (e.repeat) return
-    const action = panelKeyAction(e.code, { typing: e.target === input, inputDisabled: input.disabled, opening: false })
-    if (!action) return
+    if (!panelKeyAction(e.code, { typing: e.target === input, inputDisabled: input.disabled, opening: false })) return
     e.preventDefault()
     close()
-    opts.onClose(action === 'close-lock')
+    opts.onClose()
+  })
+
+  // Клик — действие пользователя: захват мыши вернётся сразу, без затемнения.
+  closeBtn.addEventListener('click', () => {
+    close()
+    opts.onClose()
   })
 
   return {

@@ -147,7 +147,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
         throw new Error(e instanceof Error ? chatErrorText(e) : askErrorText(e as Partial<ErrorBody>))
       }
     },
-    onClose: (lock) => resumeControls(lock),
+    onClose: () => resumeControls(true),
   })
 
   /**
@@ -214,7 +214,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
 
   document.addEventListener('keydown', (e) => {
     if (e.repeat) return
-    // Фокус вне панели (клик мимо поля): Esc и E всё равно закрывают диалог.
+    // Фокус вне панели (клик мимо поля): E всё равно закрывает диалог.
     // Нажатие E, открывшее панель, погашено в controls (defaultPrevented) и её не закрывает.
     if (guidePanel.isOpen) {
       const panelAction = panelKeyAction(e.code, {
@@ -225,7 +225,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
       if (panelAction) {
         e.preventDefault()
         guidePanel.close()
-        resumeControls(panelAction === 'close-lock')
+        resumeControls(true)
         return
       }
     }
