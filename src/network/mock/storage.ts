@@ -31,3 +31,23 @@ export function saveMockState(storage: Storage | null, state: MockState): void {
     // хранилище недоступно или переполнено: мок продолжает работать в памяти
   }
 }
+
+const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
+
+/**
+ * Поза из хранилища, пригодная для текущего мира: зал существует, координаты и поворот — числа.
+ * Иначе стартовая точка, как делает сервер для недопустимой сохранённой позиции (api.md §2).
+ */
+export function repairPose(pose: Pose | null | undefined, hasRoom: (roomId: string) => boolean, start: Pose): Pose {
+  const p = pose?.position
+  const r = pose?.rotation
+  const ok =
+    typeof pose?.room_id === 'string' &&
+    hasRoom(pose.room_id) &&
+    finite(p?.x) &&
+    finite(p?.z) &&
+    finite(r?.yaw) &&
+    finite(r?.pitch)
+  if (!ok) return { room_id: start.room_id, position: { ...start.position }, rotation: { ...start.rotation } }
+  return { room_id: pose!.room_id, position: { x: p!.x, y: 0, z: p!.z }, rotation: { yaw: r!.yaw, pitch: r!.pitch } }
+}

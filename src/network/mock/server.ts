@@ -17,7 +17,7 @@ import {
 } from '../contract'
 import { wrapAngle } from '../../scene/input'
 import { checkPhotoForm, photoFingerprint } from './photoForm'
-import { loadMockState, saveMockState, type StoredAccount } from './storage'
+import { loadMockState, repairPose, saveMockState, type StoredAccount } from './storage'
 import { START_POSITION, START_ROOM_ID, WORLD_VERSION, type MockWorld } from './world'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -62,6 +62,9 @@ function httpError(status: number, code: string, message: string): Response {
 
 export function createMockServer(world: MockWorld, storage: Storage | null = null): MockServer {
   const stored = loadMockState(storage)
+  const startPose = { room_id: START_ROOM_ID, position: { ...START_POSITION }, rotation: { yaw: 0, pitch: 0 } }
+  // Мир мог измениться с прошлого запуска: позу из хранилища приводим к допустимой.
+  stored.accounts.forEach((a) => (a.pose = repairPose(a.pose, (id) => world.rooms.has(id), startPose)))
   const accounts = new Map<string, Account>(stored.accounts.map((a) => [a.user.username, a]))
   const photos = new Map<string, { photo: Photo; blob: Blob; owner: string }>()
   const idempotent = new Map<string, { photo: Photo; fingerprint: string }>()
