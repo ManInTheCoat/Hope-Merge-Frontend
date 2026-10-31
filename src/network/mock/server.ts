@@ -16,6 +16,7 @@ import {
   type Vec3,
 } from '../contract'
 import { wrapAngle } from '../../scene/input'
+import { mockSpeedOk, mockSweep } from './geometry'
 import { checkPhotoForm, photoFingerprint } from './photoForm'
 import { loadMockState, repairPose, saveMockState, type StoredAccount } from './storage'
 import { START_POSITION, START_ROOM_ID, WORLD_VERSION, type MockWorld } from './world'
@@ -41,6 +42,29 @@ const POSE_SAVE_EVERY_MS = 5_000
 type Account = StoredAccount
 type Session = { account: Account }
 
+/** Поля полезной нагрузки команд WS: обязательные с типом, необязательные со знаком «?» (api.md §1: лишние — отказ). */
+const WS_FIELDS: Record<string, Record<string, string>> = {
+  'world.ready': { world_version: 'string', movement_epoch: 'number' },
+  'world.enter': { door_id: 'string', movement_epoch: 'number' },
+  'player.move': { movement_epoch: 'number', seq: 'number', position: 'object', rotation: 'object' },
+  'chat.send': { text: '?string', photo_id: '?string' },
+  'exhibit.inspect': { exhibit_id: 'string' },
+  'guide.ask': { guide_id: 'string', text: 'string', exhibit_id: '?string' },
+  'guide.cancel': { generation_id: 'string' },
+}
+
+/** Ровно эти поля нужных типов: лишние и отсутствующие обязательные — VALIDATION_ERROR. */
+function fieldsOk(value: unknown, spec: Record<string, string>): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const obj = value as Record<string, unknown>
+  if (Object.keys(obj).some((k) => !(k in spec))) return false
+  return Object.entries(spec).every(([k, t]) => {
+    const optional = t.startsWith('?')
+    if (!(k in obj)) return optional
+    return typeof obj[k] === t.replace('?', '')
+  })
+}
+
 export type MockServer = {
   fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
   WebSocket: typeof WebSocket
@@ -60,7 +84,9 @@ function httpError(status: number, code: string, message: string): Response {
   return json(status, { error: { code, message, request_id } }, { 'X-Request-ID': request_id })
 }
 
-export function createMockServer(world: MockWorld, storage: Storage | null = null): MockServer {
+/** `opts.now` — часы для проверки скорости движения (в тестах — ручные). */
+export function createMockServer(world: MockWorld, storage: Storage | null = null, opts: { now?: () => number } = {}): MockServer {
+  const clock = opts.now ?? (() => performance.now())
   const stored = loadMockState(storage)
   const startPose = { room_id: START_ROOM_ID, position: { ...START_POSITION }, rotation: { yaw: 0, pitch: 0 } }
   // Мир мог измениться с прошлого запуска: позу из хранилища приводим к допустимой.
@@ -69,6 +95,7 @@ export function createMockServer(world: MockWorld, storage: Storage | null = nul
   const photos = new Map<string, { photo: Photo; blob: Blob; owner: string }>()
   const idempotent = new Map<string, { photo: Photo; fingerprint: string }>()
   const generations = new Map<string, Generation[]>()
+  const knownGuides = new Set([...world.rooms.values()].flatMap((r) => r.room.guides.map((g) => g.id)))
   let session: Session | null = stored.session ? { account: accounts.get(stored.session)! } : null
   let poseSavedAt = 0
 
@@ -102,11 +129,26 @@ export function createMockServer(world: MockWorld, storage: Storage | null = nul
       } catch {
         return httpError(400, 'INVALID_JSON', 'Некорректный JSON')
       }
+      const spec: Record<string, string> =
+        path === '/auth/register'
+          ? { username: 'string', display_name: 'string', password: 'string' }
+          : { username: 'string', password: 'string' }
+      if (!fieldsOk(body, spec)) return httpError(400, 'VALIDATION_ERROR', 'Некорректные данные')
+      // Новая сессия отзывает прежнюю из cookie и закрывает её WS (api.md §2).
+      socket?.serverClose(CloseCode.SessionExpired)
       if (path === '/auth/register') {
         const username = String(body.username ?? '').trim().toLowerCase()
         const display_name = String(body.display_name ?? '').trim()
         const password = String(body.password ?? '')
-        if (!/^[a-z0-9_]{3,32}$/.test(username) || !display_name || [...display_name].length > 32 || password.length < 8) {
+        const passwordBytes = new TextEncoder().encode(password).length
+        if (
+          !/^[a-z0-9_]{3,32}$/.test(username) ||
+          !display_name ||
+          [...display_name].length > 32 ||
+          display_name.includes('\u0000') ||
+          passwordBytes < 8 ||
+          passwordBytes > 128
+        ) {
           return httpError(400, 'VALIDATION_ERROR', 'Некорректные данные')
         }
         if (accounts.has(username)) return httpError(409, 'USERNAME_TAKEN', 'Имя занято')
@@ -172,9 +214,19 @@ export function createMockServer(world: MockWorld, storage: Storage | null = nul
       })
     }
 
+    const byRequest = path.match(/^\/guides\/([^/]+)\/generations\/by-request\/([^/]+)$/)
+    if (method === 'GET' && byRequest) {
+      const guideId = decodeURIComponent(byRequest[1])
+      const requestId = decodeURIComponent(byRequest[2])
+      const gen = (generations.get(`${account.user.id}:${guideId}`) ?? []).find((g) => g.request_id === requestId)
+      return gen ? json(200, gen) : httpError(404, 'NOT_FOUND', 'Вопрос не найден')
+    }
+
     const genMatch = path.match(/^\/guides\/([^/]+)\/generations$/)
     if (method === 'GET' && genMatch) {
-      const all = generations.get(`${account.user.id}:${genMatch[1]}`) ?? []
+      const guideId = decodeURIComponent(genMatch[1])
+      if (!knownGuides.has(guideId)) return httpError(404, 'NOT_FOUND', 'Нет такого гида')
+      const all = generations.get(`${account.user.id}:${guideId}`) ?? []
       const limit = Math.min(Math.max(Number(url.searchParams.get('limit') ?? 20) || 20, 1), 50)
       const before = url.searchParams.get('before')
       let end = all.length
@@ -290,6 +342,8 @@ export function createMockServer(world: MockWorld, storage: Storage | null = nul
     ready = false
     epoch = 1
     private ackSeq = 0
+    /** Время последнего обработанного move текущего epoch; сбрасывается первым world.ready epoch. */
+    private lastMoveAt = 0
     private self: Player | null = null
     private seenRequests = new Set<string>()
     private timers = new Set<ReturnType<typeof setTimeout | typeof setInterval>>()
@@ -462,7 +516,11 @@ export function createMockServer(world: MockWorld, storage: Storage | null = nul
     }
 
     private dispatch(msg: ClientEnvelope) {
-      const rid = msg.request_id
+      const rid = typeof msg?.request_id === 'string' ? msg.request_id : undefined
+      const spec = WS_FIELDS[msg?.type]
+      if (!spec) return this.error('UNKNOWN_EVENT', 'Неизвестная команда', rid)
+      const envelopeOk = Object.keys(msg).every((k) => k === 'type' || k === 'request_id' || k === 'payload')
+      if (!envelopeOk || !fieldsOk(msg.payload, spec)) return this.error('VALIDATION_ERROR', 'Некорректные поля', rid)
       if (msg.type !== 'player.move') {
         if (!rid || !UUID_RE.test(rid)) return this.error('VALIDATION_ERROR', 'Нужен request_id (UUID v4)', rid)
         if (this.seenRequests.has(rid)) return this.error('DUPLICATE_REQUEST', 'Повторный request_id', rid)
@@ -477,16 +535,27 @@ export function createMockServer(world: MockWorld, storage: Storage | null = nul
           if (p.world_version !== WORLD_VERSION || p.movement_epoch !== this.epoch) {
             return this.error('STALE_MOVEMENT_EPOCH', 'Неактуальные версия или epoch', rid)
           }
+          if (!this.ready) this.lastMoveAt = clock() // время движения отсчитывается от первого ready epoch
           this.ready = true
           return this.send_('world.ready', { movement_epoch: this.epoch }, rid)
         }
         case 'player.move': {
+          // Правила сервера (api.md §5): старый epoch и повтор seq — без ответа, будущий epoch — ошибка.
           const p = msg.payload
-          if (!this.ready || p.movement_epoch !== this.epoch || p.seq <= this.ackSeq) return
+          if (p.movement_epoch < this.epoch) return
+          if (p.movement_epoch > this.epoch) return this.error('VALIDATION_ERROR', 'Будущий epoch')
+          if (!this.ready || p.seq <= this.ackSeq) return
+          if (!Number.isInteger(p.seq) || p.seq < 1 || p.position.y !== 0) return this.error('VALIDATION_ERROR', 'Некорректный шаг')
+          const t = clock()
+          const dt = (t - this.lastMoveAt) / 1000
+          this.lastMoveAt = t
           this.ackSeq = p.seq
           self.ack_seq = p.seq
-          self.position = { x: p.position.x, y: 0, z: p.position.z }
           self.rotation = p.rotation
+          const room = world.rooms.get(self.room_id)!.room
+          const to = { x: p.position.x, y: 0, z: p.position.z }
+          // Превышение скорости или путь сквозь блок: позиция прежняя, ack_seq обновлён.
+          if (mockSpeedOk(self.position, to, dt) && mockSweep(room, self.position, to)) self.position = to
           acc.pose = { room_id: self.room_id, position: self.position, rotation: self.rotation }
           return persistPoseThrottled()
         }
@@ -611,7 +680,8 @@ export function createMockServer(world: MockWorld, storage: Storage | null = nul
     }
 
     private guideCancel(generationId: string, rid: string) {
-      const all = [...generations.values()].flat()
+      const owner = `${session!.account.user.id}:`
+      const all = [...generations.entries()].filter(([k]) => k.startsWith(owner)).flatMap(([, v]) => v)
       const gen = all.find((g) => g.id === generationId)
       if (!gen) return this.error('NOT_FOUND', 'Генерация не найдена', rid)
       if (gen.status === 'queued' || gen.status === 'running') {

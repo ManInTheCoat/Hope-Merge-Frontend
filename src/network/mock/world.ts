@@ -90,10 +90,11 @@ async function makeImage(label: string, hue: number): Promise<Blob> {
   return canvas.convertToBlob({ type: 'image/jpeg', quality: 0.8 })
 }
 
-export async function buildWorld(): Promise<MockWorld> {
+/** `image` — генератор картинок экспонатов (в тестах без OffscreenCanvas — заглушка). */
+export async function buildWorld(image: (label: string, hue: number) => Promise<Blob> = makeImage): Promise<MockWorld> {
   const assets = new Map<string, StoredAsset>()
   const addAsset = async (id: string, label: string, hue: number) => {
-    const blob = await makeImage(label, hue)
+    const blob = await image(label, hue)
     assets.set(id, { id, bytes: blob.size, contentType: 'image/jpeg', blob })
   }
   await Promise.all([
