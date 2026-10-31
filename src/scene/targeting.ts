@@ -2,12 +2,12 @@ import type { Door, Exhibit, Guide, Vec3 } from '../network/contract'
 import type { Aabb, Vec2 } from './collision'
 
 /** Подсказку «E» показываем с запасом: сервер проверяет ≤ 3 м по своей, чуть отстающей позиции. */
-export const HINT_RADIUS_M = 2.8
+const HINT_RADIUS_M = 2.8
 /** Подсказка двери: сервер пускает до 1,5 м по XZ, но видит позицию с задержкой — берём запас. */
-export const DOOR_HINT_RADIUS_M = 1.3
+const DOOR_HINT_RADIUS_M = 1.3
 
 /** Пересекает ли отрезок a→b внутренность бокса (метод плит). Касание концами не считается. */
-export function segmentHitsBox(a: Vec3, b: Vec3, box: Aabb): boolean {
+function segmentHitsBox(a: Vec3, b: Vec3, box: Aabb): boolean {
   let t0 = 0
   let t1 = 1
   const axes: Array<[number, number, number, number]> = [
@@ -30,20 +30,20 @@ export function segmentHitsBox(a: Vec3, b: Vec3, box: Aabb): boolean {
   return true
 }
 
-type LookInput = { eye: Vec3; dir: Vec3; playerXZ: Vec2; colliders?: Aabb[] }
+type LookInput = { eye: Vec3; dir: Vec3; colliders?: Aabb[] }
 
 /** Радиус и высота цилиндра, в который должен попасть взгляд, чтобы выбрать гида. */
-export const GUIDE_HIT_RADIUS_M = 0.4
-export const GUIDE_HIT_HEIGHT_M = 1.8
+const GUIDE_HIT_RADIUS_M = 0.4
+const GUIDE_HIT_HEIGHT_M = 1.8
 /** Сервер проверяет видимость точки на этой высоте над позицией гида (api.md §7). */
-export const GUIDE_EYE_HEIGHT_M = 1.65
+const GUIDE_EYE_HEIGHT_M = 1.65
 
 export type Target = { kind: 'exhibit'; exhibit: Exhibit } | { kind: 'guide'; guide: Guide } | null
 
 /** Расстояние по лучу до картины или null, если взгляд в неё не попадает. */
 function exhibitHitT(input: LookInput, e: Exhibit, hintRadiusM: number): number | null {
-  const { eye, dir, playerXZ } = input
-  if (Math.hypot(e.position.x - playerXZ.x, e.position.z - playerXZ.z) > hintRadiusM) return null
+  const { eye, dir } = input
+  if (Math.hypot(e.position.x - eye.x, e.position.z - eye.z) > hintRadiusM) return null
 
   const nx = Math.sin(e.rotation_y)
   const nz = Math.cos(e.rotation_y)
@@ -64,8 +64,8 @@ function exhibitHitT(input: LookInput, e: Exhibit, hintRadiusM: number): number 
 
 /** Расстояние по лучу до входа в цилиндр гида или null (дальше радиуса, мимо, за стеной). */
 function guideHitT(input: LookInput, g: Guide, hintRadiusM: number): number | null {
-  const { eye, dir, playerXZ } = input
-  if (Math.hypot(g.position.x - playerXZ.x, g.position.z - playerXZ.z) > hintRadiusM) return null
+  const { eye, dir } = input
+  if (Math.hypot(g.position.x - eye.x, g.position.z - eye.z) > hintRadiusM) return null
 
   // |(eye + dir·t − p)_xz|² = r²
   const ox = eye.x - g.position.x
@@ -88,14 +88,6 @@ function guideHitT(input: LookInput, g: Guide, hintRadiusM: number): number | nu
   return t
 }
 
-/**
- * Картина, на которую смотрит игрок. Сервер (api.md, «Осмотр») требует XZ ≤ 3 м и отсутствие стены
- * между камерой и центром экспоната; `colliders` — стены зала для этой проверки.
- */
-export function pickExhibit(input: LookInput, exhibits: Exhibit[], hintRadiusM: number = HINT_RADIUS_M): Exhibit | null {
-  const t = pickTarget(input, exhibits, [], hintRadiusM)
-  return t?.kind === 'exhibit' ? t.exhibit : null
-}
 
 /** Картина или гид под взглядом; при попадании в обоих выигрывает ближний по лучу. */
 export function pickTarget(input: LookInput, exhibits: Exhibit[], guides: Guide[], hintRadiusM: number = HINT_RADIUS_M): Target {

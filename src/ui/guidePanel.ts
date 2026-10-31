@@ -1,7 +1,8 @@
 import type { Generation, GenerationsPage, Guide } from '../network/contract'
-import { codePoints, trimWs } from './text'
+import { inputMeta, trimWs } from './text'
 import { GUIDE_MAX_LEN, validateGuideText, type GuideAsks } from './guideAsks'
 import { panelKeyAction } from './guideKeys'
+import { el } from './dom'
 
 /** Более старая страница истории: спереди, без дублей (записи могли сдвинуться между запросами). */
 export function mergeOlderPage(history: readonly Generation[], older: readonly Generation[]): Generation[] {
@@ -33,13 +34,6 @@ export type GuidePanel = {
   readonly guideId: string | null
   /** Ошибка под полем; `restore` — вернуть текст вопроса в поле. */
   showError(text: string, restore?: string): void
-}
-
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, parent: HTMLElement): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag)
-  node.className = className
-  parent.appendChild(node)
-  return node
 }
 
 /** Диалог с гидом, вариант A: панель справа, зал остаётся виден. */
@@ -89,9 +83,7 @@ export function createGuidePanel(root: HTMLElement, opts: GuidePanelOptions): Gu
   let error = ''
 
   function updateMeta() {
-    const len = codePoints(trimWs(input.value))
-    const counter = len > COUNTER_FROM ? `${len} / ${GUIDE_MAX_LEN}` : ''
-    meta.textContent = [error, counter].filter(Boolean).join(' · ')
+    meta.textContent = inputMeta(input.value, GUIDE_MAX_LEN, COUNTER_FROM, error)
     meta.classList.toggle('guide-meta--error', !!error)
     meta.hidden = !meta.textContent
   }

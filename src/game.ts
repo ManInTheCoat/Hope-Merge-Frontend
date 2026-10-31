@@ -789,7 +789,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
         camera.getWorldDirection(dir)
         target = cardFor
           ? null
-          : pickTarget({ eye: camera.position, dir, playerXZ: s.pos, colliders: s.built.colliders }, s.exhibits, s.guides)
+          : pickTarget({ eye: camera.position, dir, colliders: s.built.colliders }, s.exhibits, s.guides)
         // Экспонат или гид в прицеле важнее двери рядом.
         doorTarget = cardFor || target ? null : pickDoor(s.pos, s.doors, s.built.colliders)
         const hint =

@@ -1,4 +1,4 @@
-import { wrapAngle } from '../scene/input'
+import { wrapAngle } from '../scene/angles'
 
 /** Снимок удалённого игрока; `t` — локальное время получения, мс. */
 export type Sample = { t: number; x: number; z: number; yaw: number; epoch: number }

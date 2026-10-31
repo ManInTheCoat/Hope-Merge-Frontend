@@ -28,8 +28,12 @@ export class MoveKeys {
     this.pressed.clear()
   }
 
-  get state(): MoveState {
-    const s: MoveState = { forward: false, back: false, left: false, right: false }
+  private readonly current: MoveState = { forward: false, back: false, left: false, right: false }
+
+  /** Читается каждый кадр: один и тот же объект, без новой аллокации. */
+  get state(): Readonly<MoveState> {
+    const s = this.current
+    s.forward = s.back = s.left = s.right = false
     for (const code of this.pressed) s[KEY_MAP[code]] = true
     return s
   }
@@ -49,12 +53,6 @@ export function moveVector(keys: MoveState, yaw: number, speedMps: number, dt: n
 
 /** Клиент ходит чуть медленнее серверного максимума: кадры и сеть дают джиттер, а сервер отклоняет весь шаг при превышении. */
 export const CLIENT_SPEED_FACTOR = 0.9
-
-/** Угол в диапазон [−π, π), как требует api.md. */
-export function wrapAngle(a: number): number {
-  const twoPi = Math.PI * 2
-  return ((((a + Math.PI) % twoPi) + twoPi) % twoPi) - Math.PI
-}
 
 /** Внеочередной `player.move` не отправляем сразу после планового: два шага в одном окне сервер отклонит по скорости. */
 export function shouldSendMove(lastSentAtMs: number | null, nowMs: number, minGapMs: number): boolean {

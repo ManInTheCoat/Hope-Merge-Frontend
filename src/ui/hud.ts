@@ -1,5 +1,6 @@
 import { formatCache, formatMemory } from './cacheFormat'
 import type { LinkView } from './linkView'
+import { el } from './dom'
 
 export type ExhibitCard = { title: string; description: string; image: ImageBitmap | null }
 
@@ -31,16 +32,8 @@ export type LinkActions = { retryNow(): void; enterWorld(): void; reload(): void
 const FADE_MS = 200
 const FADE_FALLBACK_MS = 250
 
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, parent: HTMLElement): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag)
-  node.className = cls
-  parent.appendChild(node)
-  return node
-}
-
 export function createHud(root: HTMLElement): Hud {
-  const crosshair = el('div', 'hud-crosshair', root)
-  crosshair.hidden = false
+  el('div', 'hud-crosshair', root)
   const hint = el('div', 'hud-hint', root)
   hint.hidden = true
   const message = el('div', 'hud-message', root)

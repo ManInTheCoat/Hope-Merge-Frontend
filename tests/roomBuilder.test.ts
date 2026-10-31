@@ -56,13 +56,6 @@ test('меш на каждую поверхность, коллайдеры то
   expect(built.bounds).toEqual({ minX: -6, maxX: 6, minZ: -8, maxZ: 8 })
 })
 
-test('exhibitMeshes содержит все картины на своих местах', () => {
-  const built = buildRoom(room, new Map([['asset_1', fakeBitmap]]), stubLabel)
-  expect([...built.exhibitMeshes.keys()].sort()).toEqual(['ex_1', 'ex_2'])
-  const m = built.exhibitMeshes.get('ex_1')!
-  expect(m.position.x).toBe(-3)
-  expect(m.position.z).toBe(-7.95)
-})
 
 test('картина без битмапа не падает', () => {
   expect(() => buildRoom(room, new Map(), stubLabel)).not.toThrow()

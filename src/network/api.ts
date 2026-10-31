@@ -1,17 +1,20 @@
 import {
   API_BASE,
   type AuthResponse,
+  type ErrorBody,
   type Generation,
   type GenerationsPage,
   type HttpErrorBody,
+  type LoginRequest,
   type Manifest,
   type MeResponse,
   type Photo,
+  type RegisterRequest,
   type Room,
   type User,
 } from './contract'
 
-type ApiErrorExtra = { retry_after_ms?: number; fields?: Record<string, string> }
+type ApiErrorExtra = Pick<ErrorBody, 'retry_after_ms' | 'fields'>
 
 export class ApiError extends Error {
   readonly status: number
@@ -124,11 +127,11 @@ const postJson = (path: string, body?: unknown) =>
     ...(body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
   })
 
-export async function register(body: { username: string; display_name: string; password: string }): Promise<User> {
+export async function register(body: RegisterRequest): Promise<User> {
   return ((await (await postJson('/auth/register', body)).json()) as AuthResponse).user
 }
 
-export async function login(body: { username: string; password: string }): Promise<User> {
+export async function login(body: LoginRequest): Promise<User> {
   return ((await (await postJson('/auth/login', body)).json()) as AuthResponse).user
 }
 

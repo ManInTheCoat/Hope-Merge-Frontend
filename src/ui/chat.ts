@@ -1,4 +1,4 @@
-import { codePoints, trimWs } from './text'
+import { inputMeta, trimWs } from './text'
 import { CHAT_MAX_LEN, ChatLog, validateChatText, type ChatLine } from './chatLog'
 
 const FADE_AFTER_MS = 10_000
@@ -84,9 +84,7 @@ export function createChat(root: HTMLElement, opts: ChatOptions): Chat {
   }
 
   function updateMeta(error?: string) {
-    const len = codePoints(trimWs(input.value))
-    const counter = len > COUNTER_FROM ? `${len} / ${CHAT_MAX_LEN}` : ''
-    meta.textContent = [error, counter].filter(Boolean).join(' · ')
+    meta.textContent = inputMeta(input.value, CHAT_MAX_LEN, COUNTER_FROM, error)
     meta.classList.toggle('chat-meta--error', !!error)
     meta.hidden = !isOpen || !meta.textContent
   }

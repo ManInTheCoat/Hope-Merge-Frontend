@@ -1,4 +1,5 @@
-import { MoveKeys, wrapAngle } from './input'
+import { wrapAngle } from './angles'
+import { MoveKeys } from './input'
 
 const SENSITIVITY = 0.002
 const PITCH_LIMIT = Math.PI / 2 - 0.01

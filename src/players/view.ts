@@ -38,8 +38,12 @@ export class RemotePlayersView {
     this.scene = scene
   }
 
+  /** Переиспользуется между кадрами. */
+  private readonly seen = new Set<string>()
+
   update(registry: PlayerRegistry, roomId: string, now: number, camera: THREE.Camera): void {
-    const seen = new Set<string>()
+    const seen = this.seen
+    seen.clear()
     for (const p of registry.visible(roomId)) {
       const pose = p.buffer.sample(now - RENDER_DELAY_MS)
       if (!pose) continue

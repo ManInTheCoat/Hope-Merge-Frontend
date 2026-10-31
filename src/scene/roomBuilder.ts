@@ -7,7 +7,6 @@ export type BuiltRoom = {
   group: THREE.Group
   colliders: Aabb[]
   bounds: Bounds2
-  exhibitMeshes: Map<string, THREE.Mesh>
   /** Таблички с именами гидов: каждый кадр поворачиваются к камере, чтобы имя читалось с любой стороны. */
   guideLabels: THREE.Object3D[]
   /** Освобождает геометрии, материалы и текстуры. Битмапы закрывает RoomManager.unload(). */
@@ -26,7 +25,7 @@ const DOOR_WALL_SEARCH_M = 1.5
  * Точка на грани ближайшей стены и нормаль этой грани в сторону двери (внутрь зала). Стена — блок не ниже
  * двери: к постаменту или скамье дверь не прижимаем.
  */
-export function doorPlacement(x: number, z: number, colliders: Aabb[], center: Vec2): { point: Vec2; normal: Vec2 } {
+function doorPlacement(x: number, z: number, colliders: Aabb[], center: Vec2): { point: Vec2; normal: Vec2 } {
   let best: { point: Vec2; normal: Vec2; dist: number } | null = null
   for (const b of colliders) {
     if (b.maxY < DOOR_HEIGHT) continue
@@ -64,7 +63,6 @@ export function buildRoom(room: Room, bitmaps: Map<string, ImageBitmap>, labelFn
     group.add(mesh)
   }
 
-  const exhibitMeshes = new Map<string, THREE.Mesh>()
   for (const e of room.exhibits) {
     const bitmap = bitmaps.get(e.image_asset_id)
     let material: THREE.MeshBasicMaterial
@@ -90,7 +88,6 @@ export function buildRoom(room: Room, bitmaps: Map<string, ImageBitmap>, labelFn
     mesh.add(frame)
 
     group.add(mesh)
-    exhibitMeshes.set(e.id, mesh)
   }
 
   const colliders = surfacesToColliders(room.surfaces)
@@ -136,7 +133,6 @@ export function buildRoom(room: Room, bitmaps: Map<string, ImageBitmap>, labelFn
     group,
     colliders,
     bounds: { minX: room.bounds.min.x, maxX: room.bounds.max.x, minZ: room.bounds.min.z, maxZ: room.bounds.max.z },
-    exhibitMeshes,
     guideLabels,
     dispose() {
       group.traverse((o) => {

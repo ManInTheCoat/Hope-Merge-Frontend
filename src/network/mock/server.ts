@@ -15,7 +15,7 @@ import {
   type User,
   type Vec3,
 } from '../contract'
-import { wrapAngle } from '../../scene/input'
+import { wrapAngle } from '../../scene/angles'
 import { mockSpeedOk, mockSweep, mockValidPose } from './geometry'
 import { checkPhotoForm, photoFingerprint } from './photoForm'
 import { loadMockState, mergeMockState, repairPose, saveMockState, type StoredAccount } from './storage'

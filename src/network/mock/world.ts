@@ -9,7 +9,7 @@ import type {
   Vec3,
 } from '../contract'
 
-export const WORLD_ID = 'mock-world'
+const WORLD_ID = 'mock-world'
 export const WORLD_VERSION = 'mock-1'
 export const START_ROOM_ID = 'hall_antiquity'
 export const START_POSITION: Vec3 = { x: 0, y: 0, z: 5 }
