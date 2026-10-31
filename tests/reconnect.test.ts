@@ -115,6 +115,7 @@ test('4006 → обновить клиент, 1008 → стоп, 4001 → вхо
     const h = harness([])
     h.loop.handleClose(code)
     expect(h.states.at(-1)!.kind).toBe(kind)
+    if (kind === 'stopped') expect(h.states.at(-1)).toEqual({ kind: 'stopped', code: 1008 })
     expect(h.live().length).toBe(0)
   }
 })

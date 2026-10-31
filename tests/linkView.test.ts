@@ -18,7 +18,10 @@ test('первая попытка входа не называется пере�
 test('4009, 4006 и стоп — экраны без автоповторов', () => {
   expect(linkView({ kind: 'replaced' }, 0).screen).toEqual({ text: 'Игра открыта в другой вкладке', button: 'enter' })
   expect(linkView({ kind: 'update' }, 0).screen).toEqual({ text: 'Версия клиента устарела — обновите страницу', button: 'reload' })
-  expect(linkView({ kind: 'stopped' }, 0).screen).toEqual({ text: 'Соединение закрыто', button: 'enter' })
+  expect(linkView({ kind: 'stopped', code: 1000 }, 0).screen).toEqual({ text: 'Соединение закрыто', button: 'enter' })
+  for (const code of [1003, 1008, 1009]) {
+    expect(linkView({ kind: 'stopped', code }, 0).screen).toEqual({ text: 'Ошибка протокола', button: 'enter' })
+  }
 })
 
 test('в игре и на входе ничего не показывается', () => {

@@ -20,7 +20,7 @@ export function linkView(state: LinkState, now: number, firstEntry = false): Lin
     case 'update':
       return { banner: null, screen: { text: 'Версия клиента устарела — обновите страницу', button: 'reload' } }
     case 'stopped':
-      return { banner: null, screen: { text: 'Соединение закрыто', button: 'enter' } }
+      return { banner: null, screen: { text: state.code === 1000 ? 'Соединение закрыто' : 'Ошибка протокола', button: 'enter' } }
     default:
       return NONE
   }

@@ -37,7 +37,8 @@ export type LinkState =
   | { kind: 'login' }
   | { kind: 'replaced' }
   | { kind: 'update' }
-  | { kind: 'stopped' }
+  /** Закрыто без повторов: 1000 — штатно, 1003/1008/1009 — нарушение протокола. */
+  | { kind: 'stopped'; code: number }
 
 /** Итог попытки: `code` — код закрытия сокета, если он закрылся до готовности; null — другой сбой. */
 export type ConnectResult = { ok: true } | { ok: false; code: number | null; error: unknown }
@@ -53,11 +54,9 @@ export type ReconnectDeps = {
   onState(s: LinkState): void
 }
 
-const TERMINAL: Record<Exclude<CloseAction, 'retry'>, LinkState> = {
-  login: { kind: 'login' },
-  replaced: { kind: 'replaced' },
-  update: { kind: 'update' },
-  stop: { kind: 'stopped' },
+function terminal(action: Exclude<CloseAction, 'retry'>, code: number): LinkState {
+  if (action === 'stop') return { kind: 'stopped', code }
+  return { kind: action === 'replaced' ? 'replaced' : action === 'update' ? 'update' : 'login' }
 }
 
 /** Цикл подключения к игре: первая попытка, повторы по расписанию, остановка по кодам закрытия. */
@@ -85,7 +84,7 @@ export class ReconnectLoop {
     const gen = ++this.generation
     const action = closeAction(code)
     if (action === 'retry') this.wait(gen)
-    else this.deps.onState(TERMINAL[action])
+    else this.deps.onState(terminal(action, code))
   }
 
   /** «Повторить сейчас» во время ожидания. */
@@ -124,14 +123,14 @@ export class ReconnectLoop {
       return
     }
     if (result.error instanceof Error && result.error.message === 'UNSUPPORTED_PROTOCOL') {
-      return this.deps.onState(TERMINAL.update)
+      return this.deps.onState({ kind: 'update' })
     }
     const action = result.code === null ? 'retry' : closeAction(result.code)
-    if (action !== 'retry') return this.deps.onState(TERMINAL[action])
+    if (action !== 'retry') return this.deps.onState(terminal(action, result.code!))
     // Сокет не дошёл до игры: проверяем, жива ли сессия.
     const me = await this.deps.checkMe()
     if (gen !== this.generation) return
-    if (me === 'unauthenticated') return this.deps.onState(TERMINAL.login)
+    if (me === 'unauthenticated') return this.deps.onState({ kind: 'login' })
     this.attempt++
     this.wait(gen)
   }
