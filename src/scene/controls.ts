@@ -3,7 +3,7 @@ import { MoveKeys, wrapAngle } from './input'
 const SENSITIVITY = 0.002
 const PITCH_LIMIT = Math.PI / 2 - 0.01
 
-function typingInField(): boolean {
+export function typingInField(): boolean {
   const el = document.activeElement
   return el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement
 }

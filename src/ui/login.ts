@@ -121,7 +121,7 @@ export function createLoginScreen(root: HTMLElement, onSuccess: (user: User) => 
   return {
     show() {
       screen.hidden = false
-      showErrors({})
+      setMode('login')
       fields.get('username')!.input.focus()
     },
     hide,
