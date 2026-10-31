@@ -1,0 +1,103 @@
+import { expect, test } from 'bun:test'
+import * as THREE from 'three'
+import { buildRoom } from '../src/scene/roomBuilder'
+import type { Room, Surface } from '../src/network/contract'
+
+const surface = (id: string, collidable: boolean, x = 0): Surface => ({
+  id,
+  position: { x, y: 2, z: 0 },
+  size: { x: 1, y: 4, z: 1 },
+  color: '#d8d2c4',
+  collidable,
+})
+
+const room: Room = {
+  id: 'hall',
+  world_version: 'v1',
+  title: 'Зал',
+  bounds: { min: { x: -6, y: 0, z: -8 }, max: { x: 6, y: 4, z: 8 } },
+  surfaces: [surface('floor', false), surface('wall_n', true, 1), surface('wall_s', true, 2)],
+  doors: [{ id: 'door_1', target_room_id: 'other', label: 'В другой зал', position: { x: 0, y: 0, z: 7.7 }, interaction_radius_m: 1.5 }],
+  exhibits: [
+    {
+      id: 'ex_1',
+      title: 'Амфора',
+      description: '',
+      image_asset_id: 'asset_1',
+      position: { x: -3, y: 1.8, z: -7.95 },
+      rotation_y: 0,
+      width_m: 2,
+      height_m: 1.5,
+      interaction_radius_m: 3,
+    },
+    {
+      id: 'ex_2',
+      title: 'Бюст',
+      description: '',
+      image_asset_id: 'asset_2',
+      position: { x: 3, y: 1.8, z: -7.95 },
+      rotation_y: 0,
+      width_m: 2,
+      height_m: 1.5,
+      interaction_radius_m: 3,
+    },
+  ],
+  guides: [{ id: 'guide_1', display_name: 'Куратор', subtitle: '', position: { x: 3, y: 0, z: -3 }, rotation_y: 0, interaction_radius_m: 3 }],
+}
+
+const stubLabel = () => new THREE.Group()
+const fakeBitmap = { width: 4, height: 4, close() {} } as unknown as ImageBitmap
+
+test('меш на каждую поверхность, коллайдеры только collidable', () => {
+  const built = buildRoom(room, new Map(), stubLabel)
+  const surfaces = built.group.children.filter((o) => o.userData.kind === 'surface')
+  expect(surfaces.length).toBe(3)
+  expect(built.colliders.length).toBe(2)
+  expect(built.bounds).toEqual({ minX: -6, maxX: 6, minZ: -8, maxZ: 8 })
+})
+
+test('exhibitMeshes содержит все картины на своих местах', () => {
+  const built = buildRoom(room, new Map([['asset_1', fakeBitmap]]), stubLabel)
+  expect([...built.exhibitMeshes.keys()].sort()).toEqual(['ex_1', 'ex_2'])
+  const m = built.exhibitMeshes.get('ex_1')!
+  expect(m.position.x).toBe(-3)
+  expect(m.position.z).toBe(-7.95)
+})
+
+test('картина без битмапа не падает', () => {
+  expect(() => buildRoom(room, new Map(), stubLabel)).not.toThrow()
+})
+
+test('дверь и гид добавлены с id из данных', () => {
+  const built = buildRoom(room, new Map(), stubLabel)
+  const found = (kind: string) => {
+    const out: THREE.Object3D[] = []
+    built.group.traverse((o) => o.userData.kind === kind && out.push(o))
+    return out
+  }
+  expect(found('door').map((o) => o.userData.id)).toEqual(['door_1'])
+  expect(found('guide').map((o) => o.userData.id)).toEqual(['guide_1'])
+})
+
+test('dispose освобождает геометрии, материалы и текстуры', () => {
+  const built = buildRoom(room, new Map([['asset_1', fakeBitmap], ['asset_2', fakeBitmap]]), stubLabel)
+  const disposed = { geometry: 0, material: 0, texture: 0 }
+  const geometries = new Set<THREE.BufferGeometry>()
+  const materials = new Set<THREE.Material>()
+  built.group.traverse((o) => {
+    const mesh = o as THREE.Mesh
+    if (!mesh.isMesh) return
+    geometries.add(mesh.geometry)
+    for (const mat of [mesh.material].flat()) materials.add(mat)
+  })
+  geometries.forEach((g) => g.addEventListener('dispose', () => disposed.geometry++))
+  materials.forEach((mat) => {
+    mat.addEventListener('dispose', () => disposed.material++)
+    const map = (mat as THREE.MeshStandardMaterial).map
+    map?.addEventListener('dispose', () => disposed.texture++)
+  })
+  built.dispose()
+  expect(disposed.geometry).toBe(geometries.size)
+  expect(disposed.material).toBe(materials.size)
+  expect(disposed.texture).toBe(2)
+})
