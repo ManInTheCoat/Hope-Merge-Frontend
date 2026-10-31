@@ -156,3 +156,79 @@ test('guide.cancel чужой или несуществующей генерац
   await tick()
   expect(j.inbox.find((e) => e.request_id === rid)?.payload.code).toBe('NOT_FOUND')
 })
+
+/** Идёт к точке шагами по 0,3 м раз в 100 мс по ручным часам; возвращает следующий seq. */
+function walkTo(j: Awaited<ReturnType<typeof joined>>, tx: number, tz: number, within: number, seq0 = 0) {
+  let { x, z } = j.snapshot.self.position
+  if (seq0 > 0) ({ x, z } = (j as unknown as { at: { x: number; z: number } }).at)
+  let seq = seq0
+  while (Math.hypot(tx - x, tz - z) > within) {
+    const d = Math.hypot(tx - x, tz - z)
+    const k = Math.min(0.3, d - within + 0.01) / d
+    x += (tx - x) * k
+    z += (tz - z) * k
+    j.clock.advance(100)
+    move(j, ++seq, x, z)
+  }
+  ;(j as unknown as { at: { x: number; z: number } }).at = { x, z }
+  return seq
+}
+
+async function asked(j: Awaited<ReturnType<typeof joined>>) {
+  const seq = walkTo(j, 3, -3, 2)
+  const rid = crypto.randomUUID()
+  j.send('guide.ask', { guide_id: 'guide_curator', text: 'Кто автор?' }, rid)
+  await tick()
+  const gen = j.inbox.find((e) => e.request_id === rid && e.type === 'guide.accepted')!.payload.generation as { id: string }
+  return { rid, genId: gen.id, seq }
+}
+
+async function history(j: Awaited<ReturnType<typeof joined>>) {
+  const res = await j.http('GET', '/guides/guide_curator/generations?limit=20')
+  return ((await res.json()) as { items: Array<{ id: string; status: string; error: { code: string } | null }> }).items
+}
+
+test('отмена в первые 400 мс: failed CANCELLED, и больше ни started, ни delta, ни completed', async () => {
+  const j = await joined()
+  const { rid, genId } = await asked(j)
+  j.send('guide.cancel', { generation_id: genId }, crypto.randomUUID())
+  await tick(700)
+  const after = j.inbox.filter((e) => e.request_id === rid).map((e) => e.type)
+  expect(after).toContain('guide.failed')
+  expect(after).not.toContain('guide.started')
+  expect(after).not.toContain('guide.delta')
+  expect(after).not.toContain('guide.completed')
+  const g = (await history(j)).find((x) => x.id === genId)!
+  expect([g.status, g.error?.code]).toEqual(['failed', 'CANCELLED'])
+})
+
+test('переход через дверь отменяет генерацию', async () => {
+  const j = await joined()
+  const { genId, seq } = await asked(j)
+  const s2 = walkTo(j, 0, 7.4, 1.2, seq)
+  const enter = crypto.randomUUID()
+  j.send('world.enter', { door_id: 'door_antiquity_to_medieval', movement_epoch: j.snapshot.self.movement_epoch }, enter)
+  await tick(700)
+  expect(j.inbox.find((e) => e.request_id === enter)?.type).toBe('world.entered')
+  expect(s2).toBeGreaterThan(seq)
+  const g = (await history(j)).find((x) => x.id === genId)!
+  expect([g.status, g.error?.code]).toEqual(['failed', 'CANCELLED'])
+})
+
+test('разрыв WS отменяет генерацию, новый сокет того же пользователя может спрашивать', async () => {
+  const j = await joined()
+  const { genId } = await asked(j)
+  j.ws.close()
+  await tick(700)
+  const g = (await history(j)).find((x) => x.id === genId)!
+  expect([g.status, g.error?.code]).toEqual(['failed', 'CANCELLED'])
+})
+
+test('второй вопрос до завершения первого — GUIDE_BUSY', async () => {
+  const j = await joined()
+  await asked(j)
+  const rid = crypto.randomUUID()
+  j.send('guide.ask', { guide_id: 'guide_curator', text: 'И ещё' }, rid)
+  await tick()
+  expect(j.inbox.find((e) => e.request_id === rid)?.payload.code).toBe('GUIDE_BUSY')
+})

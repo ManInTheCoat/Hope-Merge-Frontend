@@ -489,6 +489,7 @@ export function createMockServer(world: MockWorld, storage: Storage | null = nul
 
     serverClose(code: number) {
       if (this.readyState === 3) return
+      this.cancelGeneration() // разрыв и замена соединения отменяют его генерацию (api.md §7)
       this.readyState = 3
       this.ready = false
       if (this.stateTimer) clearInterval(this.stateTimer)
@@ -568,6 +569,7 @@ export function createMockServer(world: MockWorld, storage: Storage | null = nul
           const dist = Math.hypot(door.position.x - self.position.x, door.position.z - self.position.z)
           if (dist > door.interaction_radius_m) return this.error('OUT_OF_RANGE', 'Слишком далеко от двери', rid)
           const spawn = world.spawns.get(door.target_room_id)!
+          this.cancelGeneration() // переход отменяет незавершённый вопрос (api.md §7)
           this.epoch += 1
           this.ackSeq = 0
           this.ready = false
@@ -629,18 +631,24 @@ export function createMockServer(world: MockWorld, storage: Storage | null = nul
 
     // --- Гид: queued → running → delta… → completed ---
 
-    private active: { gen: Generation; timer: ReturnType<typeof setInterval> } | null = null
+    /** Незавершённая генерация этого соединения; её таймеры — в общих timers сокета. */
+    private gen: Generation | null = null
 
     private guideAsk(p: { guide_id: string; text: string; exhibit_id?: string }, rid: string) {
       if (!this.ready) return this.error('GAME_NOT_READY', 'Игра не готова', rid)
       const text = p.text.trim()
-      if (!text || [...text].length > 2000) return this.error('VALIDATION_ERROR', 'Текст 1–2000 символов', rid)
+      if (!text || [...text].length > 2000 || text.includes('\u0000')) return this.error('VALIDATION_ERROR', 'Текст 1–2000 символов', rid)
       const self = this.self!
       const guide = world.rooms.get(self.room_id)!.room.guides.find((g) => g.id === p.guide_id)
       if (!guide) return this.error('NOT_FOUND', 'Гида нет в этом зале', rid)
       const dist = Math.hypot(guide.position.x - self.position.x, guide.position.z - self.position.z)
       if (dist > guide.interaction_radius_m) return this.error('OUT_OF_RANGE', 'Слишком далеко от гида', rid)
-      if (this.active) return this.error('GUIDE_BUSY', 'Предыдущий вопрос ещё обрабатывается', rid)
+      // Один незавершённый вопрос на пользователя, а не на соединение (api.md §7).
+      const userId = session!.account.user.id
+      const busy = [...generations.entries()].some(
+        ([k, list]) => k.startsWith(`${userId}:`) && list.some((g) => g.status === 'queued' || g.status === 'running'),
+      )
+      if (busy) return this.error('GUIDE_BUSY', 'Предыдущий вопрос ещё обрабатывается', rid)
 
       const userMsg: DialogMessage = { id: newId('dm'), role: 'user', text, created_at: now() }
       const gen: Generation = {
@@ -653,30 +661,45 @@ export function createMockServer(world: MockWorld, storage: Storage | null = nul
         assistant_message: null,
         error: null,
       }
-      const key = `${session!.account.user.id}:${p.guide_id}`
+      const key = `${userId}:${p.guide_id}`
       generations.set(key, [...(generations.get(key) ?? []), gen])
+      this.gen = gen
       this.send_('guide.accepted', { generation: { ...gen } }, rid)
 
       const chunks = GUIDE_REPLY.match(/.{1,12}/gs)!
       let index = 0
+      const step = () => {
+        if (this.gen !== gen || gen.status !== 'running') return
+        if (index < chunks.length) {
+          this.send_('guide.delta', { generation_id: gen.id, index, text: chunks[index] }, rid)
+          index += 1
+          return this.later(step, 60)
+        }
+        this.gen = null
+        gen.status = 'completed'
+        gen.assistant_message = { id: newId('dm'), role: 'assistant', text: GUIDE_REPLY, created_at: now() }
+        this.send_('guide.completed', { generation: { ...gen } }, rid)
+      }
       this.later(() => {
+        if (this.gen !== gen || gen.status !== 'queued') return
         gen.status = 'running'
         this.send_('guide.started', { generation_id: gen.id }, rid)
-        const timer = setInterval(() => {
-          if (index < chunks.length) {
-            this.send_('guide.delta', { generation_id: gen.id, index, text: chunks[index] }, rid)
-            index += 1
-            return
-          }
-          clearInterval(timer)
-          this.active = null
-          gen.status = 'completed'
-          gen.assistant_message = { id: newId('dm'), role: 'assistant', text: GUIDE_REPLY, created_at: now() }
-          this.send_('guide.completed', { generation: { ...gen } }, rid)
-        }, 60)
-        this.active = { gen, timer }
+        this.later(step, 60)
       }, 400)
-      this.active = { gen, timer: 0 as unknown as ReturnType<typeof setInterval> }
+    }
+
+    /** Отмена незавершённой генерации: терминальный статус больше не меняется (api.md §7). */
+    private stopGeneration(gen: Generation) {
+      if (this.gen === gen) this.gen = null
+      if (gen.status !== 'queued' && gen.status !== 'running') return
+      gen.status = 'failed'
+      gen.error = { code: 'CANCELLED', message: 'Отменено', retryable: false }
+      this.send_('guide.failed', { generation: { ...gen } }, gen.request_id)
+    }
+
+    /** Переход, разрыв или замена соединения отменяют его генерацию. */
+    cancelGeneration() {
+      if (this.gen) this.stopGeneration(this.gen)
     }
 
     private guideCancel(generationId: string, rid: string) {
@@ -684,13 +707,7 @@ export function createMockServer(world: MockWorld, storage: Storage | null = nul
       const all = [...generations.entries()].filter(([k]) => k.startsWith(owner)).flatMap(([, v]) => v)
       const gen = all.find((g) => g.id === generationId)
       if (!gen) return this.error('NOT_FOUND', 'Генерация не найдена', rid)
-      if (gen.status === 'queued' || gen.status === 'running') {
-        if (this.active) clearInterval(this.active.timer)
-        this.active = null
-        gen.status = 'failed'
-        gen.error = { code: 'CANCELLED', message: 'Отменено', retryable: false }
-        this.send_('guide.failed', { generation: { ...gen } }, gen.request_id)
-      }
+      this.stopGeneration(gen)
       this.send_('guide.cancelled', { generation: { ...gen } }, rid)
     }
   }
