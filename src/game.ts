@@ -470,9 +470,11 @@ export async function startGame(host: HTMLElement): Promise<void> {
     const s = session
 
     if (s?.budget) hud.showMemory(renderer.info.memory.textures, renderer.info.memory.geometries)
-    if (s?.ready && s.manifest && s.built) {
+    // Камера и игроки обновляются, как только зал построен: при выходе из затемнения после перехода
+    // новый зал должен быть виден уже с точки появления, а не со старой позиции у двери.
+    if (s?.manifest && s.built) {
       const m = s.manifest.movement
-      if (controls.locked && !cardFor) {
+      if (s.ready && controls.locked && !cardFor) {
         const delta = moveVector(controls.keys.state, controls.yaw, m.max_speed_mps * CLIENT_SPEED_FACTOR, dt)
         if (delta.x !== 0 || delta.z !== 0) {
           s.pos = moveCylinder(s.pos, delta, { colliders: s.built.colliders, bounds: s.built.bounds }, m.player_radius_m, m.player_height_m)
@@ -481,14 +483,16 @@ export async function startGame(host: HTMLElement): Promise<void> {
       camera.position.set(s.pos.x, m.camera_height_m, s.pos.z)
       camera.rotation.set(controls.pitch, controls.yaw, 0, 'YXZ')
 
-      camera.getWorldDirection(dir)
-      target = cardFor
-        ? null
-        : pickExhibit({ eye: camera.position, dir, playerXZ: s.pos, colliders: s.built.colliders }, s.exhibits)
-      // Экспонат в прицеле важнее двери рядом.
-      doorTarget = cardFor || target ? null : pickDoor(s.pos, s.doors)
-      const hint = target ? `E — осмотреть: ${target.title}` : doorTarget ? `E — перейти: ${doorTarget.label}` : null
-      hud.showHint(!cardFor && controls.locked ? hint : null)
+      if (s.ready) {
+        camera.getWorldDirection(dir)
+        target = cardFor
+          ? null
+          : pickExhibit({ eye: camera.position, dir, playerXZ: s.pos, colliders: s.built.colliders }, s.exhibits)
+        // Экспонат в прицеле важнее двери рядом.
+        doorTarget = cardFor || target ? null : pickDoor(s.pos, s.doors)
+        const hint = target ? `E — осмотреть: ${target.title}` : doorTarget ? `E — перейти: ${doorTarget.label}` : null
+        hud.showHint(!cardFor && controls.locked ? hint : null)
+      }
       if (s.roomId) view.update(s.players, s.roomId, now, camera)
     }
     renderer.render(scene, camera)
