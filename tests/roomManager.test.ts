@@ -1,9 +1,11 @@
 import { expect, test } from 'bun:test'
 import { ContentError, RoomManager, type RoomManagerDeps } from '../src/world/RoomManager'
 import type { Room, RoomPackage } from '../src/network/contract'
+import { AssetBudget } from '../src/world/AssetBudget'
 
 const room = { id: 'hall', world_version: 'v1', title: 'Зал', exhibits: [], doors: [], guides: [], surfaces: [] } as unknown as Room
 const roomText = JSON.stringify(room)
+const roomTextBytes = new TextEncoder().encode(roomText).length
 const pkg = (over: Partial<RoomPackage> = {}): RoomPackage => ({
   room_id: 'hall',
   descriptor_bytes: new TextEncoder().encode(roomText).length,
@@ -15,10 +17,12 @@ const pkg = (over: Partial<RoomPackage> = {}): RoomPackage => ({
 })
 
 function setup(over: Partial<RoomManagerDeps> = {}) {
+  const budget = over.budget ?? new AssetBudget(1_000_000)
   const closed: string[] = []
   const calls: string[] = []
   const deps: RoomManagerDeps = {
     version: 'v1',
+    budget,
     fetchRoomText: async (id, version) => {
       calls.push(`room:${id}:${version}`)
       return roomText
@@ -30,7 +34,7 @@ function setup(over: Partial<RoomManagerDeps> = {}) {
     decode: async (blob) => ({ size: blob.size, close: () => closed.push(String(blob.size)) }) as unknown as ImageBitmap,
     ...over,
   }
-  return { manager: new RoomManager(deps), closed, calls }
+  return { manager: new RoomManager(deps), closed, calls, budget }
 }
 
 test('загружает зал и ассеты', async () => {
@@ -111,14 +115,6 @@ test('повторный load выгружает прежний зал', async (
   expect(manager.current).not.toBeNull()
 })
 
-test('onBytes получает фактические размеры', async () => {
-  const seen: string[] = []
-  const { manager } = setup({ onBytes: (kind, id, declared, actual) => seen.push(`${kind}:${id}:${declared}:${actual}`) })
-  await manager.load(pkg(), new AbortController().signal)
-  expect(seen).toContain('asset:a1:10:10')
-  expect(seen.some((s) => s.startsWith('descriptor:hall:'))).toBe(true)
-})
-
 test('объявленный размер передаётся в загрузку как лимит', async () => {
   const limits: string[] = []
   const { manager } = setup({
@@ -154,4 +150,78 @@ test('сбой одного ассета отменяет остальные з�
   })
   await expect(manager.load(pkg(), new AbortController().signal)).rejects.toThrow('404')
   expect(siblingAborted).toBe(true)
+})
+
+test('после загрузки used = сумма фактических размеров', async () => {
+  const { manager, budget } = setup()
+  await manager.load(pkg(), new AbortController().signal)
+  expect(budget.used).toBe(roomTextBytes + 30)
+})
+
+test('фактический размер меньше объявленного заменяет резерв', async () => {
+  const { manager, budget } = setup({
+    fetchAssetBlob: async (id) => new Blob([new Uint8Array(id === 'a1' ? 10 : 15)]),
+  })
+  await manager.load(pkg(), new AbortController().signal)
+  expect(budget.used).toBe(roomTextBytes + 25)
+})
+
+test('unload освобождает бюджет', async () => {
+  const { manager, budget } = setup()
+  await manager.load(pkg(), new AbortController().signal)
+  manager.unload()
+  expect(budget.used).toBe(0)
+})
+
+test('сбой загрузки освобождает все резервы', async () => {
+  const { manager, budget } = setup({
+    fetchAssetBlob: async (id) => {
+      if (id === 'a1') throw new Error('404')
+      return new Blob([new Uint8Array(20)])
+    },
+  })
+  await expect(manager.load(pkg(), new AbortController().signal)).rejects.toThrow('404')
+  expect(budget.used).toBe(0)
+})
+
+test('превышение бюджета — ContentError и used = 0', async () => {
+  const { manager, budget } = setup({ budget: new AssetBudget(roomTextBytes + 15) })
+  await expect(manager.load(pkg(), new AbortController().signal)).rejects.toBeInstanceOf(ContentError)
+  expect(budget.used).toBe(0)
+  expect(manager.current).toBeNull()
+})
+
+test('резерв отменённой загрузки снимается только после завершения чтения', async () => {
+  const ac = new AbortController()
+  let release!: () => void
+  const gate = new Promise<void>((r) => (release = r))
+  const { manager, budget } = setup({
+    fetchAssetBlob: async (id) => {
+      await gate
+      return new Blob([new Uint8Array(id === 'a1' ? 10 : 20)])
+    },
+  })
+  const p = manager.load(pkg(), ac.signal)
+  ac.abort()
+  await Promise.resolve()
+  expect(budget.used).toBeGreaterThan(0)
+  release()
+  await expect(p).rejects.toMatchObject({ name: 'AbortError' })
+  expect(budget.used).toBe(0)
+})
+
+test('повторный load не держит оба зала', async () => {
+  let usedAtSecondStart = -1
+  let second = false
+  const { manager, budget } = setup({
+    fetchRoomText: async () => {
+      if (second && usedAtSecondStart < 0) usedAtSecondStart = budget.used - roomTextBytes // свой резерв описания уже сделан
+      return roomText
+    },
+  })
+  await manager.load(pkg(), new AbortController().signal)
+  second = true
+  await manager.load(pkg(), new AbortController().signal)
+  expect(usedAtSecondStart).toBeLessThanOrEqual(30) // только резервы нового пакета, без старого зала
+  expect(budget.used).toBe(roomTextBytes + 30)
 })

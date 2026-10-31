@@ -1,3 +1,5 @@
+import { formatCache, formatMemory } from './cacheFormat'
+
 export type ExhibitCard = { title: string; description: string; image: ImageBitmap | null }
 
 export type LoadingState = null | { kind: 'loading'; text: string } | { kind: 'error'; message: string; onRetry: () => void }
@@ -10,7 +12,17 @@ export type Hud = {
   showLoading(state: LoadingState): void
   /** Кнопка «Выйти»; null скрывает её. */
   showLogout(onClick: (() => void) | null): void
+  /** Строка кеша и строка памяти; null скрывает обе. */
+  showCache(state: { used: number; limit: number } | null): void
+  /** Вызывается каждый кадр: DOM меняется только при изменении чисел. */
+  showMemory(textures: number, geometries: number): void
+  /** Затемнение на время перехода; промис — когда анимация закончилась. */
+  fade(on: boolean): Promise<void>
+  fadeText(text: string | null): void
 }
+
+const FADE_MS = 200
+const FADE_FALLBACK_MS = 250
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, parent: HTMLElement): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag)
@@ -34,6 +46,13 @@ export function createHud(root: HTMLElement): Hud {
   const cardText = el('p', 'hud-card-text', card)
   el('div', 'hud-card-close', card).textContent = 'E — закрыть'
 
+  // Затемнение выше сцены, подсказок и карточки, но ниже экрана загрузки и чата (их DOM-узлы идут позже).
+  const fadeLayer = el('div', 'hud-fade', root)
+  fadeLayer.style.transitionDuration = `${FADE_MS}ms`
+  const fadeLabel = el('div', 'hud-fade-text', fadeLayer)
+  fadeLabel.hidden = true
+  let fadeOn = false
+
   const overlay = el('div', 'hud-overlay', root)
   overlay.hidden = true
   overlay.textContent = 'Кликните, чтобы продолжить'
@@ -53,6 +72,13 @@ export function createHud(root: HTMLElement): Hud {
   logoutButton.textContent = 'Выйти'
   let logoutHandler: (() => void) | null = null
   logoutButton.addEventListener('click', () => logoutHandler?.())
+
+  // Строка кеша поверх экрана загрузки: видно, как бюджет растёт при загрузке зала.
+  const cache = el('div', 'hud-cache', root)
+  cache.hidden = true
+  const cacheLine = el('div', 'hud-cache-line', cache)
+  const memoryLine = el('div', 'hud-cache-line', cache)
+  let memoryKey = ''
 
   let messageTimer: ReturnType<typeof setTimeout> | undefined
   let hintText: string | null = null
@@ -102,6 +128,39 @@ export function createHud(root: HTMLElement): Hud {
     showLogout(onClick) {
       logoutHandler = onClick
       logoutButton.hidden = onClick === null
+    },
+    showCache(state) {
+      cache.hidden = state === null
+      if (!state) {
+        memoryKey = ''
+        return
+      }
+      cacheLine.textContent = formatCache(state.used, state.limit)
+      cache.classList.toggle('hud-cache--over', state.used > state.limit)
+    },
+    showMemory(textures, geometries) {
+      const key = `${textures}:${geometries}`
+      if (key === memoryKey) return
+      memoryKey = key
+      memoryLine.textContent = formatMemory(textures, geometries)
+    },
+    fade(on) {
+      if (on === fadeOn) return Promise.resolve()
+      fadeOn = on
+      fadeLayer.classList.toggle('hud-fade--on', on)
+      return new Promise<void>((resolve) => {
+        const done = () => {
+          clearTimeout(timer)
+          fadeLayer.removeEventListener('transitionend', done)
+          resolve()
+        }
+        const timer = setTimeout(done, FADE_FALLBACK_MS)
+        fadeLayer.addEventListener('transitionend', done)
+      })
+    },
+    fadeText(text) {
+      fadeLabel.hidden = text === null
+      if (text !== null) fadeLabel.textContent = text
     },
   }
 }

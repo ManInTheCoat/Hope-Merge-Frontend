@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { fetchAssetBlob, fetchManifest, fetchMe, fetchRoomText, logout } from './network/api'
-import { CloseCode, type ErrorBody, type Exhibit, type Manifest } from './network/contract'
+import { CloseCode, type Door, type ErrorBody, type Exhibit, type Manifest } from './network/contract'
 import { GameSocket } from './network/ws'
 import { PlayerRegistry } from './players/registry'
 import { RemotePlayersView } from './players/view'
@@ -8,25 +8,34 @@ import { moveCylinder, type Vec2 } from './scene/collision'
 import { FirstPersonControls, typingInField } from './scene/controls'
 import { CLIENT_SPEED_FACTOR, moveVector, shouldSendMove } from './scene/input'
 import { buildRoom, type BuiltRoom } from './scene/roomBuilder'
-import { pickExhibit } from './scene/targeting'
+import { pickDoor, pickExhibit } from './scene/targeting'
 import { createChat } from './ui/chat'
 import { chatKeyAction, chatLineText } from './ui/chatLog'
 import { createHud } from './ui/hud'
 import { createLoginScreen } from './ui/login'
+import { AssetBudget } from './world/AssetBudget'
 import { MoveHistory } from './world/moveHistory'
-import { RoomManager } from './world/RoomManager'
+import { RoomManager, type LoadedRoom } from './world/RoomManager'
 
 const MOVE_SEND_INTERVAL_MS = 100
 const MAX_FRAME_DT = 0.1
 const MIN_MOVE_GAP_MS = 50
 const CHAT_SEND_TIMEOUT_MS = 10_000
+/** Без world.entered за это время считаем подтверждение потерянным и переподключаемся (api.md, «Переход»). */
+const ENTER_TIMEOUT_MS = 10_000
+/** Подпись на затемнении появляется, только если зал грузится дольше этого. */
+const FADE_TEXT_DELAY_MS = 400
 
 type Session = {
   ac: AbortController
   socket: GameSocket | null
   manifest: Manifest | null
+  budget: AssetBudget | null
+  /** Отписка HUD от бюджета этой сессии. */
+  budgetOff: (() => void) | null
   built: BuiltRoom | null
   exhibits: Exhibit[]
+  doors: Door[]
   pos: Vec2
   epoch: number
   seq: number
@@ -64,10 +73,11 @@ export async function startGame(host: HTMLElement): Promise<void> {
   camera.rotation.order = 'YXZ'
 
   const hud = createHud(host)
-  // Версия мира известна только после snapshot, поэтому менеджер создаётся на каждое подключение.
-  const makeRooms = (version: string) =>
+  // Версия мира и лимит кеша известны только после snapshot и манифеста, поэтому менеджер — на каждое подключение.
+  const makeRooms = (version: string, budget: AssetBudget) =>
     new RoomManager({
       version,
+      budget,
       fetchRoomText,
       fetchAssetBlob,
       // flipY для ImageBitmap задаётся при декодировании: UNPACK_FLIP_Y_WEBGL на него не действует.
@@ -79,6 +89,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
   let cardFor: Exhibit | null = null
   let cardToken = 0
   let target: Exhibit | null = null
+  let doorTarget: Door | null = null
 
   const view = new RemotePlayersView(scene)
 
@@ -180,6 +191,12 @@ export async function startGame(host: HTMLElement): Promise<void> {
     if (!s) return
     s.ready = false
     s.ac.abort()
+    // Отписка до выгрузки зала: иначе release при unload снова покажет строку кеша.
+    s.budgetOff?.()
+    s.budgetOff = null
+    hud.showCache(null)
+    void hud.fade(false)
+    hud.fadeText(null)
     if (s.moveTimer) clearInterval(s.moveTimer)
     s.socket?.close()
     if (controls.locked) document.exitPointerLock() // иначе клик по кнопке «Повторить» уходит в захваченный canvas
@@ -198,6 +215,103 @@ export async function startGame(host: HTMLElement): Promise<void> {
     hud.showHint(null)
     hud.showClickOverlay(false)
     target = null
+    doorTarget = null
+  }
+
+  function showRoom(s: Session, loaded: LoadedRoom) {
+    s.built = buildRoom(loaded.room, loaded.bitmaps)
+    s.exhibits = loaded.room.exhibits
+    s.doors = loaded.room.doors
+    scene.add(s.built.group)
+  }
+
+  function becomeReady(s: Session) {
+    s.ready = true
+    s.moveTimer = setInterval(() => sendMove(s), MOVE_SEND_INTERVAL_MS)
+    controls.enabled = !chat.isOpen
+    if (!chat.isOpen) hud.showClickOverlay(!controls.locked, () => controls.lock())
+  }
+
+  /** Движение, осмотр и переходы недоступны до нового world.ready. */
+  function blockForTransition(s: Session) {
+    s.ready = false
+    if (s.moveTimer) clearInterval(s.moveTimer)
+    s.moveTimer = null
+    controls.enabled = false
+    controls.keys.clear()
+    closeCard()
+    hud.showHint(null)
+    target = null
+    doorTarget = null
+  }
+
+  async function enterDoor(s: Session, door: Door): Promise<void> {
+    const socket = s.socket
+    const manager = rooms
+    const manifest = s.manifest
+    if (!socket || !manager || !manifest) return
+    const alive = () => session === s && !s.ac.signal.aborted
+    sendMove(s, true) // сервер меряет расстояние до двери по своей позиции: она должна быть свежей
+    blockForTransition(s)
+    const faded = hud.fade(true)
+
+    let entered
+    try {
+      entered = await socket.request('world.enter', { door_id: door.id, movement_epoch: s.epoch }, 'world.entered', ENTER_TIMEOUT_MS)
+    } catch (e) {
+      if (!alive()) return
+      if (e instanceof Error && e.message === 'SOCKET_CLOSED') return // экран ошибки покажет onClose
+      if (e instanceof Error && e.message === 'REQUEST_TIMEOUT') return void connect() // фактический зал придёт в snapshot
+      await hud.fade(false) // сервер отказал: состояние не менялось, возвращаем игрока
+      if (!alive()) return
+      becomeReady(s)
+      hud.showMessage(errorMessage(e))
+      return
+    }
+    await faded
+    if (!alive()) return
+
+    // Сначала полностью освобождаем старый зал, только потом новые загрузки (api.md, «Учёт бюджета»).
+    if (s.built) {
+      scene.remove(s.built.group)
+      s.built.dispose()
+      s.built = null
+    }
+    manager.unload()
+    s.exhibits = []
+    s.doors = []
+
+    const { self, current_room } = entered
+    s.roomId = current_room.room_id
+    s.epoch = self.movement_epoch
+    s.seq = 0
+    s.lastMoveSentAt = null
+    s.history = new MoveHistory()
+    s.pos = { x: self.position.x, z: self.position.z }
+    controls.yaw = self.rotation.yaw
+    controls.pitch = self.rotation.pitch
+    s.players.setSelf(self)
+
+    const slow = setTimeout(() => hud.fadeText(`Переход: ${door.label}…`), FADE_TEXT_DELAY_MS)
+    try {
+      const loaded = await manager.load(current_room, s.ac.signal)
+      if (!alive()) return
+      showRoom(s, loaded)
+      await socket.request('world.ready', { world_version: manifest.world_version, movement_epoch: s.epoch }, 'world.ready')
+      if (!alive()) return
+    } catch (e) {
+      if (!alive()) return
+      // Серверная позиция уже в новом зале: повтор через переподключение возьмёт её из snapshot.
+      teardown(s)
+      hud.showLoading({ kind: 'error', message: `Не удалось загрузить зал: ${errorMessage(e)}`, onRetry: () => void connect() })
+      return
+    } finally {
+      clearTimeout(slow)
+    }
+    hud.fadeText(null)
+    await hud.fade(false)
+    if (!alive()) return
+    becomeReady(s)
   }
 
   function sendMove(s: Session, force = false) {
@@ -221,8 +335,11 @@ export async function startGame(host: HTMLElement): Promise<void> {
       ac: new AbortController(),
       socket: null,
       manifest: null,
+      budget: null,
+      budgetOff: null,
       built: null,
       exhibits: [],
+      doors: [],
       pos: { x: 0, z: 0 },
       epoch: 0,
       seq: 0,
@@ -280,13 +397,14 @@ export async function startGame(host: HTMLElement): Promise<void> {
       const manifest = await fetchManifest(s.ac.signal)
       if (manifest.world_version !== snapshot.world_version) throw new Error('Версия мира не совпадает, обновите страницу')
       s.manifest = manifest
+      s.budget = new AssetBudget(manifest.client_cache_limit_bytes)
+      hud.showCache({ used: 0, limit: s.budget.limit })
+      s.budgetOff = s.budget.onChange((used, limit) => hud.showCache({ used, limit }))
 
-      rooms = makeRooms(snapshot.world_version)
+      rooms = makeRooms(snapshot.world_version, s.budget)
       const loaded = await rooms.load(snapshot.current_room, s.ac.signal)
       if (s.ac.signal.aborted) return
-      s.built = buildRoom(loaded.room, loaded.bitmaps)
-      s.exhibits = loaded.room.exhibits
-      scene.add(s.built.group)
+      showRoom(s, loaded)
 
       const self = snapshot.self
       s.pos = { x: self.position.x, z: self.position.z }
@@ -297,11 +415,8 @@ export async function startGame(host: HTMLElement): Promise<void> {
       await socket.request('world.ready', { world_version: snapshot.world_version, movement_epoch: s.epoch }, 'world.ready')
       if (s.ac.signal.aborted) return
 
-      s.ready = true
-      s.moveTimer = setInterval(() => sendMove(s), MOVE_SEND_INTERVAL_MS)
-      controls.enabled = !chat.isOpen
       hud.showLoading(null)
-      if (!chat.isOpen) hud.showClickOverlay(!controls.locked, () => controls.lock())
+      becomeReady(s)
     } catch (e) {
       if (s.ac.signal.aborted || session !== s) return
       teardown(s)
@@ -323,7 +438,11 @@ export async function startGame(host: HTMLElement): Promise<void> {
   controls.onInteract = async () => {
     if (cardFor) return closeCard()
     const s = session
-    if (!s?.ready || !s.socket || !target || !controls.locked) return
+    if (!s?.ready || !s.socket || !controls.locked) return
+    if (!target) {
+      if (doorTarget) void enterDoor(s, doorTarget)
+      return
+    }
     const exhibit = target
     sendMove(s, true) // серверная позиция должна быть свежей, иначе у границы 3 м придёт OUT_OF_RANGE
     cardFor = exhibit
@@ -350,9 +469,12 @@ export async function startGame(host: HTMLElement): Promise<void> {
     last = now
     const s = session
 
-    if (s?.ready && s.manifest && s.built) {
+    if (s?.budget) hud.showMemory(renderer.info.memory.textures, renderer.info.memory.geometries)
+    // Камера и игроки обновляются, как только зал построен: при выходе из затемнения после перехода
+    // новый зал должен быть виден уже с точки появления, а не со старой позиции у двери.
+    if (s?.manifest && s.built) {
       const m = s.manifest.movement
-      if (controls.locked && !cardFor) {
+      if (s.ready && controls.locked && !cardFor) {
         const delta = moveVector(controls.keys.state, controls.yaw, m.max_speed_mps * CLIENT_SPEED_FACTOR, dt)
         if (delta.x !== 0 || delta.z !== 0) {
           s.pos = moveCylinder(s.pos, delta, { colliders: s.built.colliders, bounds: s.built.bounds }, m.player_radius_m, m.player_height_m)
@@ -361,11 +483,16 @@ export async function startGame(host: HTMLElement): Promise<void> {
       camera.position.set(s.pos.x, m.camera_height_m, s.pos.z)
       camera.rotation.set(controls.pitch, controls.yaw, 0, 'YXZ')
 
-      camera.getWorldDirection(dir)
-      target = cardFor
-        ? null
-        : pickExhibit({ eye: camera.position, dir, playerXZ: s.pos, colliders: s.built.colliders }, s.exhibits)
-      hud.showHint(!cardFor && target && controls.locked ? `E — осмотреть: ${target.title}` : null)
+      if (s.ready) {
+        camera.getWorldDirection(dir)
+        target = cardFor
+          ? null
+          : pickExhibit({ eye: camera.position, dir, playerXZ: s.pos, colliders: s.built.colliders }, s.exhibits)
+        // Экспонат в прицеле важнее двери рядом.
+        doorTarget = cardFor || target ? null : pickDoor(s.pos, s.doors)
+        const hint = target ? `E — осмотреть: ${target.title}` : doorTarget ? `E — перейти: ${doorTarget.label}` : null
+        hud.showHint(!cardFor && controls.locked ? hint : null)
+      }
       if (s.roomId) view.update(s.players, s.roomId, now, camera)
     }
     renderer.render(scene, camera)

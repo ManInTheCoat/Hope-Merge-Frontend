@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
-import { pickExhibit } from '../src/scene/targeting'
-import type { Exhibit } from '../src/network/contract'
+import { pickDoor, pickExhibit } from '../src/scene/targeting'
+import type { Door, Exhibit } from '../src/network/contract'
 
 const ex = (id: string, x: number, z: number, rotation_y = 0): Exhibit => ({
   id,
@@ -68,4 +68,27 @@ test('стена, на которой висит картина, не мешае
 test('низкий барьер ниже линии взгляда не мешает', () => {
   const rail = { minX: -3, maxX: 3, minY: 0, maxY: 1, minZ: -7.1, maxZ: -6.9 }
   expect(pickExhibit({ ...look(0, -5.95), colliders: [rail] }, [main])?.id).toBe('main')
+})
+
+const door = (id: string, x: number, z: number, y = 0): Door =>
+  ({ id, target_room_id: 'r', label: id, position: { x, y, z }, interaction_radius_m: 1.5 }) as Door
+
+test('pickDoor: пустой список — null', () => {
+  expect(pickDoor({ x: 0, z: 0 }, [])).toBeNull()
+})
+
+test('pickDoor: дверь в 1,2 м находится', () => {
+  expect(pickDoor({ x: 0, z: 0 }, [door('d', 1.2, 0)])?.id).toBe('d')
+})
+
+test('pickDoor: дверь в 1,4 м — null', () => {
+  expect(pickDoor({ x: 0, z: 0 }, [door('d', 0, 1.4)])).toBeNull()
+})
+
+test('pickDoor: из двух в радиусе — ближайшая', () => {
+  expect(pickDoor({ x: 0, z: 0 }, [door('far', 1.1, 0), door('near', 0, 0.5)])?.id).toBe('near')
+})
+
+test('pickDoor: высота не учитывается', () => {
+  expect(pickDoor({ x: 0, z: 0 }, [door('d', 1, 0, 5)])?.id).toBe('d')
 })

@@ -1,5 +1,6 @@
 import { ContentError } from '../network/api'
 import type { Room, RoomPackage } from '../network/contract'
+import type { AssetBudget } from './AssetBudget'
 
 export { ContentError }
 
@@ -11,8 +12,8 @@ export type RoomManagerDeps = {
   fetchRoomText: (roomId: string, version: string, maxBytes: number, signal?: AbortSignal) => Promise<string>
   fetchAssetBlob: (assetId: string, version: string, maxBytes: number, signal?: AbortSignal) => Promise<Blob>
   decode: (blob: Blob) => Promise<ImageBitmap>
-  /** Точка подключения будущего AssetBudget: объявленный и фактический размер каждого файла. */
-  onBytes?: (kind: 'descriptor' | 'asset', id: string, declared: number, actual: number) => void
+  /** Учёт байтов: резерв объявленного размера до запроса, фактический после, освобождение при выгрузке. */
+  budget: AssetBudget
 }
 
 function abortError(): DOMException {
@@ -21,6 +22,8 @@ function abortError(): DOMException {
 
 export class RoomManager {
   private loaded: LoadedRoom | null = null
+  /** Ключи бюджета, удерживаемые загруженным залом. */
+  private heldKeys: string[] = []
   private readonly deps: RoomManagerDeps
 
   constructor(deps: RoomManagerDeps) {
@@ -50,20 +53,32 @@ export class RoomManager {
       bitmaps.clear()
     }
 
+    // Ключи, по которым сделан резерв в этой загрузке; при сбое снимаются только после завершения всех чтений.
+    const keys: string[] = []
+    const reserve = (key: string, declared: number) => {
+      deps.budget.reserve(key, declared)
+      keys.push(key)
+    }
+    const releaseAll = () => keys.forEach((k) => deps.budget.release(k))
+
     const loadRoom = async (): Promise<Room> => {
+      const key = `room:${pkg.room_id}`
+      reserve(key, pkg.descriptor_bytes)
       const text = await deps.fetchRoomText(pkg.room_id, deps.version, pkg.descriptor_bytes, inner.signal)
       const actual = new TextEncoder().encode(text).length
-      deps.onBytes?.('descriptor', pkg.room_id, pkg.descriptor_bytes, actual)
       if (actual > pkg.descriptor_bytes) throw new ContentError(`Описание зала больше объявленного: ${actual} > ${pkg.descriptor_bytes}`)
+      deps.budget.settle(key, actual)
       const room = JSON.parse(text) as Room
       if (room.id !== pkg.room_id) throw new ContentError(`Зал ${room.id} вместо ${pkg.room_id}`)
       return room
     }
 
     const loadAsset = async (asset: RoomPackage['assets'][number]): Promise<void> => {
+      const key = `asset:${asset.id}`
+      reserve(key, asset.bytes)
       const blob = await deps.fetchAssetBlob(asset.id, deps.version, asset.bytes, inner.signal)
-      deps.onBytes?.('asset', asset.id, asset.bytes, blob.size)
       if (blob.size > asset.bytes) throw new ContentError(`Ресурс ${asset.id} больше объявленного: ${blob.size} > ${asset.bytes}`)
+      deps.budget.settle(key, blob.size)
       const bitmap = await deps.decode(blob)
       if (inner.signal.aborted) {
         bitmap.close()
@@ -80,16 +95,20 @@ export class RoomManager {
       results.find((r) => r.status === 'rejected')
     if (failure || signal.aborted) {
       closeAll()
+      releaseAll()
       if (failure) throw (failure as PromiseRejectedResult).reason
       throw abortError()
     }
 
     this.loaded = { room: (results[0] as PromiseFulfilledResult<Room>).value, bitmaps }
+    this.heldKeys = keys
     return this.loaded
   }
 
   unload(): void {
     this.loaded?.bitmaps.forEach((b) => b.close())
     this.loaded = null
+    this.heldKeys.forEach((k) => this.deps.budget.release(k))
+    this.heldKeys = []
   }
 }
