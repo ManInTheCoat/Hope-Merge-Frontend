@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { ContentError, fetchAssetBlob, fetchGenerations, fetchManifest, fetchMe, fetchRoom, logout, uploadPhoto } from './network/api'
+import { ContentError, fetchAssetBlob, fetchGenerationByRequest, fetchGenerations, fetchManifest, fetchMe, fetchRoom, logout, uploadPhoto } from './network/api'
 import { type Door, type ErrorBody, type Exhibit, type Guide } from './network/contract'
 import { closeAction, ReconnectLoop, type ConnectResult, type LinkState } from './network/reconnect'
 import { uuidV4 } from './network/uuid'
@@ -22,7 +22,7 @@ import { chatKeyAction, chatLineText } from './ui/chatLog'
 import { askErrorText, GuideAsks } from './ui/guideAsks'
 import { panelKeyAction } from './ui/guideKeys'
 import { createGuidePanel } from './ui/guidePanel'
-import { NO_CONNECTION, userErrorText } from './ui/errorText'
+import { NO_CONNECTION, NO_RESPONSE, userErrorText } from './ui/errorText'
 import { createHud } from './ui/hud'
 import { linkView } from './ui/linkView'
 import { createLoginScreen } from './ui/login'
@@ -35,7 +35,7 @@ const MOVE_SEND_INTERVAL_MS = 100
 const MAX_FRAME_DT = 0.1
 const MIN_MOVE_GAP_MS = 50
 const CHAT_SEND_TIMEOUT_MS = 10_000
-/** Без guide.accepted или error за это время снимаем вопрос и возвращаем текст в поле. */
+/** Без guide.accepted или error за это время проверяем вопрос по request_id. */
 const ASK_ACCEPT_TIMEOUT_MS = 10_000
 const GUIDE_CANCEL_TIMEOUT_MS = 10_000
 /** Без world.entered за это время считаем подтверждение потерянным и переподключаемся (api.md, «Переход»). */
@@ -101,7 +101,19 @@ export async function startGame(host: HTMLElement): Promise<void> {
     onClose: (sent) => resumeControls(sent),
   })
 
-  const asks = new GuideAsks()
+  const asks = new GuideAsks({
+    // Пропуск в потоке: если генерация уже завершена, итог берём из истории (api.md §7).
+    onGap: () => {
+      const a = asks.active
+      const s = session
+      if (!a || !s) return
+      fetchGenerationByRequest(a.guideId, a.requestId, s.ac.signal)
+        .then((gen) => {
+          if (session === s && gen && (gen.status === 'completed' || gen.status === 'failed')) asks.finished(gen)
+        })
+        .catch(() => {}) // итог всё равно придёт в guide.completed или в истории при следующем открытии
+    },
+  })
   const guidePanel = createGuidePanel(host, {
     asks,
     loadPage: (guideId, before) => fetchGenerations(guideId, before, session?.ac.signal),
@@ -112,9 +124,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
       const requestId = s.socket.send('guide.ask', { guide_id: guide.id, text })
       if (!requestId) return 'Нет связи с сервером'
       asks.start({ requestId, guideId: guide.id, guideName: guide.display_name, question: text })
-      setTimeout(() => {
-        if (session === s) askFailed(requestId, 'Сервер не ответил, попробуйте ещё раз')
-      }, ASK_ACCEPT_TIMEOUT_MS)
+      setTimeout(() => void recoverAsk(s, guide.id, requestId), ASK_ACCEPT_TIMEOUT_MS)
       return null
     },
     async onCancel() {
@@ -132,12 +142,34 @@ export async function startGame(host: HTMLElement): Promise<void> {
   })
 
   /**
+   * Нет guide.accepted за ASK_ACCEPT_TIMEOUT_MS: вопрос мог быть принят, а ответ потерян. Точное состояние —
+   * по request_id (api.md §7); 404 — вопрос не принят, текст возвращается в поле.
+   */
+  async function recoverAsk(s: Session, guideId: string, requestId: string) {
+    const a = asks.active
+    if (session !== s || a?.requestId !== requestId || a.generationId !== null) return
+    let gen
+    try {
+      gen = await fetchGenerationByRequest(guideId, requestId, s.ac.signal)
+    } catch {
+      if (session === s) askFailed(requestId, NO_RESPONSE)
+      return
+    }
+    if (session !== s) return
+    const back = asks.recover(requestId, gen)
+    if (back) returnQuestion(back, NO_RESPONSE)
+  }
+
+  /**
    * Вопрос не принят. Текст возвращаем в поле, только если открыт тот же гид: иначе Enter отправил бы его
    * другому гиду. В остальных случаях — сообщение поверх игры.
    */
   function askFailed(requestId: string, text: string) {
     const r = asks.rejected(requestId)
-    if (!r) return
+    if (r) returnQuestion(r, text)
+  }
+
+  function returnQuestion(r: { question: string; guideId: string }, text: string) {
     if (guidePanel.guideId === r.guideId) guidePanel.showError(text, r.question)
     else hud.showMessage(`Вопрос гиду не отправлен: ${text}`)
   }

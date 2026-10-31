@@ -64,7 +64,6 @@ type Active = {
   stream: StreamText
 }
 
-type Finished = { gen: Generation; partial: string }
 
 function fromHistory(g: Generation): DialogEntry {
   const base = { key: g.id, question: g.user_message.text, answer: g.assistant_message?.text ?? '', note: null }
@@ -80,20 +79,24 @@ function fromHistory(g: Generation): DialogEntry {
   }
 }
 
-function fromFinished({ gen, partial }: Finished): DialogEntry {
-  if (gen.status === 'completed') return fromHistory(gen)
-  return { ...fromHistory(gen), answer: partial }
-}
-
 /**
  * Вопросы гидам в рамках одной сессии WS. Незавершённый вопрос один на пользователя (`GUIDE_BUSY`),
  * поэтому и здесь он один. Завершённые храним до `reset()`, чтобы панель показывала их без перезагрузки истории.
  */
 export class GuideAsks {
   private current: Active | null = null
-  private done: Finished[] = []
+  /** Завершённые генерации: показываем так же, как их отдаст история (частичный текст failed не сохраняется). */
+  private done: Generation[] = []
+  /** Генерации, о пропуске в потоке которых уже сообщили. */
+  private gapReported = new Set<string>()
+  private readonly onGap: ((generationId: string) => void) | undefined
   private isCancelling = false
   private listeners = new Set<() => void>()
+
+  /** `onGap` — в потоке пропущен индекс: итог нужно восстановить через HTTP (api.md §7). */
+  constructor(opts: { onGap?: (generationId: string) => void } = {}) {
+    this.onGap = opts.onGap
+  }
 
   get active(): { requestId: string; guideId: string; guideName: string; generationId: string | null } | null {
     const a = this.current
@@ -132,6 +135,10 @@ export class GuideAsks {
     a.phase = 'answering'
     a.stream.push(index, text)
     this.emit()
+    if (a.stream.hasGap && !this.gapReported.has(generationId)) {
+      this.gapReported.add(generationId)
+      this.onGap?.(generationId)
+    }
   }
 
   finished(gen: Generation): void {
@@ -139,7 +146,7 @@ export class GuideAsks {
     if (!a) return
     const ours = a.generationId === null ? a.requestId === gen.request_id : a.generationId === gen.id
     if (!ours) return
-    this.done.push({ gen, partial: a.stream.text })
+    this.done.push(gen)
     this.current = null
     this.isCancelling = false
     this.emit()
@@ -154,6 +161,19 @@ export class GuideAsks {
     return { question: a.question, guideId: a.guideId }
   }
 
+  /**
+   * Восстановление вопроса без ответа на ask (тайм-аут) по `GET …/by-request/{request_id}`:
+   * null-генерация — вопрос не принят, возвращаем текст; иначе продолжаем с её статусом.
+   */
+  recover(requestId: string, gen: Generation | null): { question: string; guideId: string } | null {
+    const a = this.current
+    if (!a || a.requestId !== requestId) return null
+    if (gen === null) return a.generationId === null ? this.rejected(requestId) : null
+    if (a.generationId === null) this.accepted(requestId, gen)
+    else if (gen.status === 'completed' || gen.status === 'failed') this.finished(gen)
+    return null
+  }
+
   setCancelling(v: boolean): void {
     if (this.isCancelling === v) return
     this.isCancelling = v
@@ -162,7 +182,7 @@ export class GuideAsks {
 
   entries(guideId: string, history: readonly Generation[]): DialogEntry[] {
     const live = new Map<string, DialogEntry>()
-    for (const f of this.done) if (f.gen.guide_id === guideId) live.set(f.gen.id, fromFinished(f))
+    for (const g of this.done) if (g.guide_id === guideId) live.set(g.id, fromHistory(g))
     const a = this.current
     let activeEntry: DialogEntry | null = null
     if (a && a.guideId === guideId) {
@@ -190,6 +210,7 @@ export class GuideAsks {
   reset(): void {
     this.current = null
     this.done = []
+    this.gapReported.clear()
     this.isCancelling = false
     this.emit()
   }

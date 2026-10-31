@@ -1,6 +1,7 @@
 import {
   API_BASE,
   type AuthResponse,
+  type Generation,
   type GenerationsPage,
   type HttpErrorBody,
   type Manifest,
@@ -89,6 +90,17 @@ export async function fetchManifest(signal?: AbortSignal): Promise<Manifest> {
 export async function fetchGenerations(guideId: string, before: string | null, signal?: AbortSignal): Promise<GenerationsPage> {
   const cursor = before === null ? '' : `&before=${encodeURIComponent(before)}`
   return (await apiFetch(`/guides/${encodeURIComponent(guideId)}/generations?limit=20${cursor}`, { signal })).json()
+}
+
+/** Генерация по request_id исходного вопроса; null — вопрос не принят (api.md §7, «История и восстановление»). */
+export async function fetchGenerationByRequest(guideId: string, requestId: string, signal?: AbortSignal): Promise<Generation | null> {
+  try {
+    const path = `/guides/${encodeURIComponent(guideId)}/generations/by-request/${encodeURIComponent(requestId)}`
+    return (await (await apiFetch(path, { signal })).json()) as Generation
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) return null
+    throw e
+  }
 }
 
 /** Описание зала и точный размер полученного файла: бюджет учитывает именно его (api.md, «Учёт бюджета»). */

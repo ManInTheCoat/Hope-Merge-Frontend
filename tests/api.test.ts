@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { ApiError, ContentError, fetchGenerations, fetchMe, fetchRoom, readLimited, uploadPhoto } from '../src/network/api'
+import { ApiError, ContentError, fetchGenerationByRequest, fetchGenerations, fetchMe, fetchRoom, readLimited, uploadPhoto } from '../src/network/api'
 
 function streamResponse(chunks: number[], headers: Record<string, string> = {}) {
   let pulled = 0
@@ -111,6 +111,26 @@ test('fetchRoom: BOM и битый UTF-8 в строке не ломают уч�
     const { room, bytes } = await fetchRoom('hall', 'v1', body.length)
     expect(bytes).toBe(body.length)
     expect(room.id).toBe('hall')
+  } finally {
+    globalThis.fetch = orig
+  }
+})
+
+test('fetchGenerationByRequest: сегменты кодируются, 404 → null', async () => {
+  const orig = globalThis.fetch
+  const urls: string[] = []
+  let status = 200
+  globalThis.fetch = (async (url: string) => {
+    urls.push(String(url))
+    return status === 200
+      ? new Response(JSON.stringify({ id: 'gen1' }), { status })
+      : new Response(JSON.stringify({ error: { code: 'NOT_FOUND', message: 'm', request_id: 'r' } }), { status })
+  }) as unknown as typeof fetch
+  try {
+    expect((await fetchGenerationByRequest('g/1', 'r 1'))?.id).toBe('gen1')
+    expect(urls[0].endsWith('/api/v1/guides/g%2F1/generations/by-request/r%201')).toBe(true)
+    status = 404
+    expect(await fetchGenerationByRequest('g1', 'r1')).toBeNull()
   } finally {
     globalThis.fetch = orig
   }
