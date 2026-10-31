@@ -1,4 +1,4 @@
-import { MoveKeys } from './input'
+import { MoveKeys, wrapAngle } from './input'
 
 const SENSITIVITY = 0.002
 const PITCH_LIMIT = Math.PI / 2 - 0.01
@@ -29,7 +29,7 @@ export class FirstPersonControls {
     })
     document.addEventListener('mousemove', (e) => {
       if (!this.locked || !this.enabled) return
-      this.yaw -= e.movementX * SENSITIVITY
+      this.yaw = wrapAngle(this.yaw - e.movementX * SENSITIVITY)
       this.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, this.pitch - e.movementY * SENSITIVITY))
     })
     document.addEventListener('keydown', (e) => {

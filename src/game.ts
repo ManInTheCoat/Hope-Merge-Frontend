@@ -5,7 +5,7 @@ import { ensureDevSession } from './network/devAuth'
 import { GameSocket } from './network/ws'
 import { moveCylinder, type Vec2 } from './scene/collision'
 import { FirstPersonControls } from './scene/controls'
-import { moveVector } from './scene/input'
+import { CLIENT_SPEED_FACTOR, moveVector, shouldSendMove } from './scene/input'
 import { buildRoom, type BuiltRoom } from './scene/roomBuilder'
 import { pickExhibit } from './scene/targeting'
 import { createHud } from './ui/hud'
@@ -13,6 +13,7 @@ import { RoomManager } from './world/RoomManager'
 
 const MOVE_SEND_INTERVAL_MS = 100
 const MAX_FRAME_DT = 0.1
+const MIN_MOVE_GAP_MS = 50
 
 type Session = {
   ac: AbortController
@@ -25,6 +26,7 @@ type Session = {
   seq: number
   ready: boolean
   moveTimer: ReturnType<typeof setInterval> | null
+  lastMoveSentAt: number | null
 }
 
 function errorMessage(e: unknown): string {
@@ -86,6 +88,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
     s.ac.abort()
     if (s.moveTimer) clearInterval(s.moveTimer)
     s.socket?.close()
+    if (controls.locked) document.exitPointerLock() // иначе клик по кнопке «Повторить» уходит в захваченный canvas
     if (s.built) {
       scene.remove(s.built.group)
       s.built.dispose()
@@ -99,8 +102,11 @@ export async function startGame(host: HTMLElement): Promise<void> {
     target = null
   }
 
-  function sendMove(s: Session) {
+  function sendMove(s: Session, force = false) {
     if (!s.ready || !s.socket) return
+    const now = performance.now()
+    if (force && !shouldSendMove(s.lastMoveSentAt, now, MIN_MOVE_GAP_MS)) return
+    s.lastMoveSentAt = now
     s.socket.send('player.move', {
       movement_epoch: s.epoch,
       seq: ++s.seq,
@@ -122,6 +128,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
       seq: 0,
       ready: false,
       moveTimer: null,
+      lastMoveSentAt: null,
     }
     session = s
     hud.showLoading({ kind: 'loading', text: 'Загрузка зала…' })
@@ -172,7 +179,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
     const s = session
     if (!s?.ready || !s.socket || !target || !controls.locked) return
     const exhibit = target
-    sendMove(s) // серверная позиция должна быть свежей, иначе у границы 3 м придёт OUT_OF_RANGE
+    sendMove(s, true) // серверная позиция должна быть свежей, иначе у границы 3 м придёт OUT_OF_RANGE
     cardFor = exhibit
     hud.showHint(null)
     hud.showCard({
@@ -198,7 +205,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
     if (s?.ready && s.manifest && s.built) {
       const m = s.manifest.movement
       if (controls.locked && !cardFor) {
-        const delta = moveVector(controls.keys.state, controls.yaw, m.max_speed_mps, dt)
+        const delta = moveVector(controls.keys.state, controls.yaw, m.max_speed_mps * CLIENT_SPEED_FACTOR, dt)
         if (delta.x !== 0 || delta.z !== 0) {
           s.pos = moveCylinder(s.pos, delta, { colliders: s.built.colliders, bounds: s.built.bounds }, m.player_radius_m, m.player_height_m)
         }

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { MoveKeys, moveVector } from '../src/scene/input'
+import { CLIENT_SPEED_FACTOR, MoveKeys, moveVector, shouldSendMove, wrapAngle } from '../src/scene/input'
 
 const none = { forward: false, back: false, left: false, right: false }
 const near = (a: number, b: number) => expect(Math.abs(a - b)).toBeLessThan(1e-9)
@@ -48,4 +48,27 @@ test('clear сбрасывает зажатые клавиши', () => {
   k.onKeyDown('KeyA')
   k.clear()
   expect(k.state).toEqual(none)
+})
+
+test('wrapAngle приводит yaw к диапазону [−π, π)', () => {
+  near(wrapAngle(0), 0)
+  near(wrapAngle(Math.PI * 1.5), -Math.PI / 2)
+  near(wrapAngle(-Math.PI * 2.5), -Math.PI / 2)
+  near(wrapAngle(Math.PI), -Math.PI)
+  for (const a of [10, -10, 100, -100, 3.2]) {
+    const w = wrapAngle(a)
+    expect(w).toBeGreaterThanOrEqual(-Math.PI)
+    expect(w).toBeLessThan(Math.PI)
+  }
+})
+
+test('клиент ходит медленнее максимума сервера', () => {
+  expect(CLIENT_SPEED_FACTOR).toBeLessThan(1)
+  expect(CLIENT_SPEED_FACTOR).toBeGreaterThan(0.8)
+})
+
+test('shouldSendMove не шлёт move чаще минимального зазора', () => {
+  expect(shouldSendMove(1000, 1030, 50)).toBe(false)
+  expect(shouldSendMove(1000, 1050, 50)).toBe(true)
+  expect(shouldSendMove(null, 1000, 50)).toBe(true)
 })

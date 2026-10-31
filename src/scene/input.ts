@@ -46,3 +46,17 @@ export function moveVector(keys: MoveState, yaw: number, speedMps: number, dt: n
   const cos = Math.cos(yaw)
   return { x: (-sin * f + cos * r) * k, z: (-cos * f - sin * r) * k }
 }
+
+/** Клиент ходит чуть медленнее серверного максимума: кадры и сеть дают джиттер, а сервер отклоняет весь шаг при превышении. */
+export const CLIENT_SPEED_FACTOR = 0.9
+
+/** Угол в диапазон [−π, π), как требует api.md. */
+export function wrapAngle(a: number): number {
+  const twoPi = Math.PI * 2
+  return ((((a + Math.PI) % twoPi) + twoPi) % twoPi) - Math.PI
+}
+
+/** Внеочередной `player.move` не отправляем сразу после планового: два шага в одном окне сервер отклонит по скорости. */
+export function shouldSendMove(lastSentAtMs: number | null, nowMs: number, minGapMs: number): boolean {
+  return lastSentAtMs === null || nowMs - lastSentAtMs >= minGapMs
+}
