@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { SnapshotBuffer } from '../src/players/interpolation'
+import { RENDER_DELAY_MS, SnapshotBuffer } from '../src/players/interpolation'
 
 const s = (t: number, x: number, yaw = 0, epoch = 1) => ({ t, x, z: 0, yaw, epoch })
 
@@ -58,4 +58,18 @@ test('снимки старше 1000 мс от последнего удаляю
   for (let i = 0; i <= 15; i++) b.push(s(i * 100, i * 0.1))
   expect(b.size).toBeLessThanOrEqual(11)
   expect(b.sample(1400)?.x).toBeCloseTo(1.4)
+})
+
+test('при джиттере ±30 мс у 10 Гц отрисовка не упирается в последний снимок', () => {
+  const buf = new SnapshotBuffer()
+  const arrivals = [0, 70, 200, 270, 400, 470, 600, 670, 800]
+  for (let i = 0; i < arrivals.length - 1; i++) {
+    const t = arrivals[i]
+    buf.push({ t, x: t / 1000, z: 0, yaw: 0, epoch: 1 })
+    if (t < 300) continue // буфер ещё набирается
+    for (let now = t; now < arrivals[i + 1]; now += 16) {
+      const p = buf.sample(now - RENDER_DELAY_MS)!
+      expect(p.x).toBeLessThan(t / 1000) // между известными точками, не застыл на последней
+    }
+  }
 })

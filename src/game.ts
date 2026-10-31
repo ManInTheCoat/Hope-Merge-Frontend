@@ -690,6 +690,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
   }
 
   const dir = new THREE.Vector3()
+  const labelParentQ = new THREE.Quaternion()
   let last = performance.now()
   renderer.setAnimationLoop((now) => {
     const dt = Math.min((now - last) / 1000, MAX_FRAME_DT)
@@ -735,6 +736,11 @@ export async function startGame(host: HTMLElement): Promise<void> {
         hud.showHint(!cardFor && controls.locked ? hint : null)
       }
       if (s.roomId) view.update(s.players, s.roomId, now, camera)
+      // Табличка — дочерний узел повёрнутой фигуры гида: мировой поворот к камере задаём через родителя.
+      for (const label of s.built.guideLabels) {
+        label.parent!.getWorldQuaternion(labelParentQ)
+        label.quaternion.copy(labelParentQ.invert().multiply(camera.quaternion))
+      }
     }
     controlsBar.setVisible(!!s?.ready && controls.locked && !chat.isOpen && !guidePanel.isOpen)
     renderer.render(scene, camera)

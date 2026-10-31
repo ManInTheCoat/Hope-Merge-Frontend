@@ -36,3 +36,9 @@ test('после отдачи всё возвращается на место', 
   expect(p.pitch).toBeCloseTo(0)
   expect(p.shutter).toBe(0)
 })
+
+test('боковое качание — раз за цикл шага: максимум на четверти цикла', () => {
+  const quarter = 1 / (1.8 * 4)
+  const p = handPose({ timeS: quarter, walking: 1, sinceShotMs: null })
+  expect(p.x - HAND_BASE.x).toBeCloseTo(0.006, 6)
+})

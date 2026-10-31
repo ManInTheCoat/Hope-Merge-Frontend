@@ -8,6 +8,8 @@ export type BuiltRoom = {
   colliders: Aabb[]
   bounds: Bounds2
   exhibitMeshes: Map<string, THREE.Mesh>
+  /** Таблички с именами гидов: каждый кадр поворачиваются к камере, чтобы имя читалось с любой стороны. */
+  guideLabels: THREE.Object3D[]
   /** Освобождает геометрии, материалы и текстуры. Битмапы закрывает RoomManager.unload(). */
   dispose(): void
 }
@@ -112,6 +114,7 @@ export function buildRoom(room: Room, bitmaps: Map<string, ImageBitmap>, labelFn
     group.add(door)
   }
 
+  const guideLabels: THREE.Object3D[] = []
   for (const g of room.guides) {
     const figure = new THREE.Group()
     figure.userData = { kind: 'guide', id: g.id }
@@ -124,6 +127,7 @@ export function buildRoom(room: Room, bitmaps: Map<string, ImageBitmap>, labelFn
     head.position.y = 1.55
     const label = labelFn(g.display_name, 1.2)
     label.position.y = 2.0
+    guideLabels.push(label)
     figure.add(body, head, label)
     group.add(figure)
   }
@@ -133,6 +137,7 @@ export function buildRoom(room: Room, bitmaps: Map<string, ImageBitmap>, labelFn
     colliders,
     bounds: { minX: room.bounds.min.x, maxX: room.bounds.max.x, minZ: room.bounds.min.z, maxZ: room.bounds.max.z },
     exhibitMeshes,
+    guideLabels,
     dispose() {
       group.traverse((o) => {
         const mesh = o as THREE.Mesh

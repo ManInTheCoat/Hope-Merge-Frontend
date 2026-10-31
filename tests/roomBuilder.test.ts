@@ -168,3 +168,11 @@ test('без стены рядом дверь смотрит к центру з�
   const f = facing(doorById(buildRoom(r, new Map(), stubLabel), 'd'))
   expect(f.x).toBeGreaterThan(0.99) // центр (15,15) — по +X
 })
+
+test('таблички гидов отдаются наружу, чтобы поворачивать их к камере', () => {
+  const r: Room = {
+    ...room,
+    guides: [{ id: 'g', display_name: 'Куратор', subtitle: '', position: { x: 0, y: 0, z: 0 }, rotation_y: 0, interaction_radius_m: 3 }],
+  }
+  expect(buildRoom(r, new Map(), stubLabel).guideLabels.length).toBe(1)
+})

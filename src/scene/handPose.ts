@@ -25,7 +25,7 @@ export function handPose({ timeS, walking, sinceShotMs }: HandPoseInput): HandPo
   const phase = timeS * BOB_HZ * Math.PI * 2
   // Вертикаль — два раза за цикл шага (каждый шаг), горизонталь — раз за цикл, как при ходьбе.
   const bobY = -Math.abs(Math.sin(phase)) * BOB_Y * w
-  const bobX = Math.sin(phase / 2) * BOB_X * w
+  const bobX = Math.sin(phase) * BOB_X * w
 
   // Отдача: резкий толчок и плавный возврат; кнопка нажата первую треть.
   let kick = 0
