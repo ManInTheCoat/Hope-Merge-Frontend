@@ -1,12 +1,21 @@
-import { expect, test } from 'bun:test'
+import { afterAll, expect, test } from 'bun:test'
 
 // bun без DOM: controls вешает обработчики на document и window, этого достаточно EventTarget.
+// Подменённые глобальные объекты возвращаются после файла: другие тесты идут в том же процессе.
 const g = globalThis as Record<string, unknown>
+const FAKES = ['document', 'window', 'HTMLInputElement', 'HTMLTextAreaElement', 'HTMLSelectElement'] as const
+const saved = new Map(FAKES.map((k) => [k, Object.getOwnPropertyDescriptor(g, k)]))
 g.document ??= Object.assign(new EventTarget(), { pointerLockElement: null, activeElement: null })
 g.window ??= new EventTarget()
 g.HTMLInputElement ??= class {}
 g.HTMLTextAreaElement ??= class {}
 g.HTMLSelectElement ??= class {}
+afterAll(() => {
+  for (const [k, d] of saved) {
+    if (d) Object.defineProperty(g, k, d)
+    else delete g[k]
+  }
+})
 
 const { FirstPersonControls } = await import('../src/scene/controls')
 
