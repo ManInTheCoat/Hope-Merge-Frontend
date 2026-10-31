@@ -25,3 +25,6 @@ dist-ssr
 
 # Specs and plans
 docs/superpowers/
+
+# Рабочие файлы исполнителя
+.superpowers/

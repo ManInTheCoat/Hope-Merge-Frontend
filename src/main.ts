@@ -1,26 +1,18 @@
-import * as THREE from 'three'
 import './style.css'
 
-if (import.meta.env.VITE_USE_MOCK === 'true') {
-  import('./network/mock').then((m) => m.installMocks())
+async function boot() {
+  if (import.meta.env.VITE_USE_MOCK === 'true') {
+    const { installMocks } = await import('./network/mock')
+    await installMocks()
+  }
+  const { startGame } = await import('./game')
+  await startGame(document.querySelector<HTMLDivElement>('#app')!)
 }
 
-const renderer = new THREE.WebGLRenderer({ antialias: true })
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5))
-document.querySelector<HTMLDivElement>('#app')!.appendChild(renderer.domElement)
-
-const scene = new THREE.Scene()
-scene.background = new THREE.Color(0x1a1a1f)
-
-const camera = new THREE.PerspectiveCamera(70, 1, 0.1, 100)
-camera.position.set(0, 1.6, 0)
-
-function resize() {
-  renderer.setSize(window.innerWidth, window.innerHeight)
-  camera.aspect = window.innerWidth / window.innerHeight
-  camera.updateProjectionMatrix()
-}
-window.addEventListener('resize', resize)
-resize()
-
-renderer.setAnimationLoop(() => renderer.render(scene, camera))
+boot().catch((e: unknown) => {
+  // Например, WebGL недоступен: показываем причину вместо пустого экрана.
+  console.error(e)
+  const app = document.querySelector<HTMLDivElement>('#app')!
+  app.textContent = `Не удалось запустить галерею: ${e instanceof Error ? e.message : String(e)}`
+  app.style.cssText = 'display:flex;align-items:center;justify-content:center;color:#f4efe6;background:#1a1a1f;font:18px system-ui'
+})

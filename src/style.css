@@ -10,3 +10,102 @@ body,
 canvas {
   display: block;
 }
+
+#app {
+  position: relative;
+  font-family: system-ui, sans-serif;
+  color: #f4efe6;
+}
+
+.hud-crosshair {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  margin: -3px 0 0 -3px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.8);
+  pointer-events: none;
+}
+
+.hud-hint,
+.hud-message {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 8px 16px;
+  border-radius: 8px;
+  background: rgba(20, 20, 24, 0.8);
+  pointer-events: none;
+}
+
+.hud-hint {
+  top: calc(50% + 40px);
+}
+
+.hud-message {
+  bottom: 48px;
+}
+
+.hud-card {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(360px, 90vw);
+  padding: 16px;
+  border-radius: 12px;
+  background: rgba(20, 20, 24, 0.92);
+}
+
+.hud-card-image {
+  width: 100%;
+  border-radius: 6px;
+}
+
+.hud-card-title {
+  margin: 12px 0 4px;
+  font-size: 20px;
+}
+
+.hud-card-text {
+  margin: 0 0 12px;
+  line-height: 1.4;
+}
+
+.hud-card-close {
+  font-size: 13px;
+  opacity: 0.7;
+}
+
+.hud-overlay,
+.hud-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  background: rgba(10, 10, 14, 0.75);
+  font-size: 22px;
+}
+
+.hud-overlay {
+  cursor: pointer;
+}
+
+.hud-loading {
+  background: rgba(10, 10, 14, 0.95);
+}
+
+.hud-loading-retry {
+  padding: 8px 20px;
+  font-size: 16px;
+  cursor: pointer;
+}
+
+[hidden] {
+  display: none !important;
+}
