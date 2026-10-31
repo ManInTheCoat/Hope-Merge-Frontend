@@ -15,8 +15,10 @@ class FakeWebSocket {
   send(data: string) {
     this.sent.push(data)
   }
-  close() {
-    this.serverClose(1000)
+  // Как в браузере: CLOSING сразу, событие close — позже.
+  close(code = 1000) {
+    this.readyState = 2
+    queueMicrotask(() => this.serverClose(code))
   }
   serverSend(type: string, payload: unknown, request_id?: string, event_id: string = crypto.randomUUID()) {
     const env = { type, event_id, server_time: 't', ...(request_id ? { request_id } : {}), payload }
@@ -110,7 +112,7 @@ test('open отклоняется по тайм-ауту, если snapshot не
   const p = GameSocket.open('ws://x/ws', Ctor, 30)
   const fake = FakeWebSocket.last
   await expect(p).rejects.toThrow('SNAPSHOT_TIMEOUT')
-  expect(fake.readyState).toBe(3)
+  expect(fake.readyState).toBeGreaterThanOrEqual(2)
 })
 
 test('событие с уже виденным event_id не доставляется повторно', async () => {
@@ -137,5 +139,28 @@ test('request без ответа отклоняется по тайм-ауту,
   const p = socket.request('chat.send', { text: 'hi' }, 'chat.message', 20)
   await expect(p).rejects.toThrow('REQUEST_TIMEOUT')
   const rid = JSON.parse(fake.sent.at(-1)!).request_id
+  const warn = spyOn(console, 'warn').mockImplementation(() => {})
+  let delivered = 0
+  socket.on('chat.message', () => delivered++)
   fake.serverSend('chat.message', { message_id: 'm', author: { user_id: 'u', display_name: 'u' }, text: 'hi', photo: null }, rid)
+  expect(delivered).toBe(1) // обычным подписчикам событие доходит
+  expect(warn).not.toHaveBeenCalled() // и не считается неизвестным
+  expect(socket.isOpen).toBe(true)
+  warn.mockRestore()
+})
+
+test('известное событие без подписчика не пишется как неизвестное', async () => {
+  const { fake } = await opened()
+  const warn = spyOn(console, 'warn').mockImplementation(() => {})
+  fake.serverSend('guide.cancelled', { generation: {} })
+  expect(warn).not.toHaveBeenCalled()
+  warn.mockRestore()
+})
+
+test('snapshot с другой версией протокола: UNSUPPORTED_PROTOCOL и сокет закрыт', async () => {
+  const p = GameSocket.open('ws://x/ws', Ctor)
+  const fake = FakeWebSocket.last
+  fake.serverSend('world.snapshot', { ...snapshot, protocol_version: 2 })
+  await expect(p).rejects.toThrow('UNSUPPORTED_PROTOCOL')
+  expect(fake.readyState).toBeGreaterThanOrEqual(2)
 })
