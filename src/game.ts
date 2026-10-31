@@ -27,6 +27,7 @@ import { createLoginScreen } from './ui/login'
 import { createPhotoCard } from './ui/photoCard'
 import { AssetBudget } from './world/AssetBudget'
 import { MoveHistory } from './world/moveHistory'
+import { MovePath } from './world/movePath'
 import { RoomManager, type LoadedRoom } from './world/RoomManager'
 
 const MOVE_SEND_INTERVAL_MS = 100
@@ -62,6 +63,10 @@ type Session = {
   lastMoveSentAt: number | null
   selfId: string
   history: MoveHistory
+  /** Траектория с прошлой отправки: отправляем её точки, а не хорду через угол. */
+  path: MovePath
+  /** Прошлая отправка остановилась на промежуточной точке: следующую шлём, не дожидаясь таймера. */
+  pathBehind: boolean
   players: PlayerRegistry
   roomId: string | null
   /** Последний снимок; создаётся вместе с бюджетом подключения. */
@@ -479,6 +484,8 @@ export async function startGame(host: HTMLElement): Promise<void> {
     s.lastMoveSentAt = null
     s.history = new MoveHistory()
     s.pos = { x: self.position.x, z: self.position.z }
+    s.path.reset(s.pos)
+    s.pathBehind = false
     controls.yaw = self.rotation.yaw
     controls.pitch = self.rotation.pitch
     s.players.setSelf(self)
@@ -509,13 +516,20 @@ export async function startGame(host: HTMLElement): Promise<void> {
     if (!s.ready || !s.socket) return
     const now = performance.now()
     if (force && !shouldSendMove(s.lastMoveSentAt, now, MIN_MOVE_GAP_MS)) return
+    const m = s.manifest?.movement
+    if (!m || !s.moveWorld) return
+    // Сервер разрешает 4·min(dt, 0,25) м: идём с тем же запасом, что и при ходьбе.
+    const elapsed = s.lastMoveSentAt === null ? MOVE_SEND_INTERVAL_MS : now - s.lastMoveSentAt
+    const maxStep = m.max_speed_mps * CLIENT_SPEED_FACTOR * Math.min(elapsed / 1000, 0.25)
+    const pos = s.path.take(s.moveWorld, m.player_radius_m, maxStep) ?? s.path.sent
+    s.pathBehind = s.path.pending
     s.lastMoveSentAt = now
     const seq = ++s.seq
-    s.history.record(seq, s.pos)
+    s.history.record(seq, pos)
     s.socket.send('player.move', {
       movement_epoch: s.epoch,
       seq,
-      position: { x: s.pos.x, y: 0, z: s.pos.z },
+      position: { x: pos.x, y: 0, z: pos.z },
       rotation: { yaw: controls.yaw, pitch: controls.pitch },
     })
   }
@@ -542,6 +556,8 @@ export async function startGame(host: HTMLElement): Promise<void> {
       lastMoveSentAt: null,
       selfId: '',
       history: new MoveHistory(),
+      path: new MovePath(),
+      pathBehind: false,
       players: new PlayerRegistry(''),
       roomId: null,
       photo: null,
@@ -582,7 +598,11 @@ export async function startGame(host: HTMLElement): Promise<void> {
         const self = players.find((p) => p.user_id === s.selfId)
         if (!s.ready || !self || self.movement_epoch !== s.epoch) return
         const corrected = s.history.reconcile(self.ack_seq, self.position)
-        if (corrected) s.pos = corrected
+        if (corrected) {
+          s.pos = corrected
+          s.path.reset(corrected)
+          s.pathBehind = false
+        }
       })
       socket.on('error', (body, env) => {
         // Ошибки без request_id относятся к player.move: сервер отклонил структуру шага.
@@ -612,6 +632,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
 
       const self = snapshot.self
       s.pos = { x: self.position.x, z: self.position.z }
+      s.path.reset(s.pos)
       s.epoch = self.movement_epoch
       controls.yaw = self.rotation.yaw
       controls.pitch = self.rotation.pitch
@@ -686,9 +707,12 @@ export async function startGame(host: HTMLElement): Promise<void> {
         if (delta.x !== 0 || delta.z !== 0) {
           const before = s.pos
           s.pos = moveCylinder(s.pos, delta, s.moveWorld!, m.player_radius_m)
+          s.path.record(s.pos)
           if (dt > 0) walked = Math.hypot(s.pos.x - before.x, s.pos.z - before.z) / dt / m.max_speed_mps
         }
       }
+      // Угол обойдён не целиком: досылаем точки траектории, не дожидаясь таймера (не чаще MIN_MOVE_GAP_MS).
+      if (s.ready && s.pathBehind && shouldSendMove(s.lastMoveSentAt, now, MIN_MOVE_GAP_MS)) sendMove(s)
       walkBlend += (Math.min(walked, 1) - walkBlend) * Math.min(1, dt * 8)
       camera.position.set(s.pos.x, m.camera_height_m, s.pos.z)
       camera.rotation.set(controls.pitch, controls.yaw, 0, 'YXZ')
