@@ -280,3 +280,17 @@ test('фото: подпись обрезается и не длиннее 200, 
   expect(photo.thumbnail_bytes).toBeLessThanOrEqual(131072)
   expect((await postPhoto(j, 'я'.repeat(201))).status).toBe(400)
 })
+
+test('вкладка не затирает свежую позу чужого аккаунта своей устаревшей копией', async () => {
+  const storage = new MemStorage() as unknown as Storage
+  const tabB = await mockServer(storage)
+  await tabB.register('bob')
+  const tabA = await mockServer(storage) // загрузила bob со стартовой позой
+  const j = await tabB.join()
+  tabB.clock.advance(100)
+  j.send('player.move', { movement_epoch: j.snapshot.self.movement_epoch, seq: 1, position: { x: 0, y: 0, z: 4.7 }, rotation: { yaw: 0, pitch: 0 } }, undefined)
+  j.ws.close() // штатное отключение сохраняет позу bob
+  await tabA.register('carol') // вкладка A пишет своё состояние
+  const stored = JSON.parse(storage.getItem('hope-merge-mock-v1')!) as { accounts: Array<{ user: { username: string }; pose: { position: { z: number } } }> }
+  expect(stored.accounts.find((a) => a.user.username === 'bob')!.pose.position.z).toBeCloseTo(4.7, 9)
+})

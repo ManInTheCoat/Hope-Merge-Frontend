@@ -104,11 +104,16 @@ export function createMockServer(world: MockWorld, storage: Storage | null = nul
   const knownGuides = new Set([...world.rooms.values()].flatMap((r) => r.room.guides.map((g) => g.id)))
   let session: Session | null = stored.session ? { account: accounts.get(stored.session)! } : null
   let poseSavedAt = 0
+  /** Аккаунты, которые эта вкладка создала или под которыми входила. */
+  const touched = new Set<string>()
 
   /** Аккаунты, позы и сессия переживают перезагрузку страницы (у реального бэкенда — БД и cookie). */
   function persist() {
     poseSavedAt = Date.now()
-    const mine = { accounts: [...accounts.values()], session: session?.account.user.username ?? null }
+    // Пишем только свои аккаунты: копии чужих, загруженные при старте, могли устареть в другой вкладке.
+    const current = session?.account.user.username
+    const own = [...accounts.values()].filter((a) => touched.has(a.user.username) || a.user.username === current)
+    const mine = { accounts: own, session: session?.account.user.username ?? null }
     saveMockState(storage, mergeMockState(loadMockState(storage), mine))
   }
 
@@ -181,6 +186,7 @@ export function createMockServer(world: MockWorld, storage: Storage | null = nul
           pose: { room_id: START_ROOM_ID, position: { ...START_POSITION }, rotation: { yaw: 0, pitch: 0 } },
         }
         accounts.set(username, account)
+        touched.add(username)
         session = { account }
         persist()
         return json(201, { user })
@@ -190,6 +196,7 @@ export function createMockServer(world: MockWorld, storage: Storage | null = nul
         return httpError(401, 'INVALID_CREDENTIALS', 'Неверное имя или пароль')
       }
       session = { account }
+      touched.add(account.user.username)
       persist()
       return json(200, { user: account.user })
     }
