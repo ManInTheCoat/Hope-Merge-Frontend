@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { ContentError, fetchAssetBlob, fetchGenerations, fetchManifest, fetchMe, fetchRoomText, logout, uploadPhoto } from './network/api'
+import { ContentError, fetchAssetBlob, fetchGenerations, fetchManifest, fetchMe, fetchRoom, logout, uploadPhoto } from './network/api'
 import { CloseCode, type Door, type ErrorBody, type Exhibit, type Guide, type Manifest } from './network/contract'
 import { uuidV4 } from './network/uuid'
 import { GameSocket } from './network/ws'
@@ -95,7 +95,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
     new RoomManager({
       version,
       budget,
-      fetchRoomText,
+      fetchRoom,
       fetchAssetBlob,
       // flipY для ImageBitmap задаётся при декодировании: UNPACK_FLIP_Y_WEBGL на него не действует.
       decode: (blob) => createImageBitmap(blob, { imageOrientation: 'flipY' }),

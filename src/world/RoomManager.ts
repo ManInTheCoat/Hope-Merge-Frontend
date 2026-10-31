@@ -2,14 +2,12 @@ import { ContentError } from '../network/api'
 import type { Room, RoomPackage } from '../network/contract'
 import type { AssetBudget } from './AssetBudget'
 
-export { ContentError }
-
 export type LoadedRoom = { room: Room; bitmaps: Map<string, ImageBitmap> }
 
 export type RoomManagerDeps = {
   version: string
   /** `maxBytes` — объявленный размер: загрузка обязана прерваться, как только он превышен. */
-  fetchRoomText: (roomId: string, version: string, maxBytes: number, signal?: AbortSignal) => Promise<string>
+  fetchRoom: (roomId: string, version: string, maxBytes: number, signal?: AbortSignal) => Promise<{ room: Room; bytes: number }>
   fetchAssetBlob: (assetId: string, version: string, maxBytes: number, signal?: AbortSignal) => Promise<Blob>
   decode: (blob: Blob) => Promise<ImageBitmap>
   /** Учёт байтов: резерв объявленного размера до запроса, фактический после, освобождение при выгрузке. */
@@ -42,8 +40,11 @@ export class RoomManager {
     const onOuterAbort = () => inner.abort()
     signal.addEventListener('abort', onOuterAbort)
     if (signal.aborted) inner.abort()
+    // Первая по времени настоящая ошибка, а не AbortError соседей, которых она отменила.
+    let firstError: { reason: unknown } | null = null
     const failFast = <T>(p: Promise<T>): Promise<T> =>
       p.catch((e) => {
+        if (!firstError && (e as Error)?.name !== 'AbortError') firstError = { reason: e }
         inner.abort()
         throw e
       })
@@ -64,11 +65,8 @@ export class RoomManager {
     const loadRoom = async (): Promise<Room> => {
       const key = `room:${pkg.room_id}`
       reserve(key, pkg.descriptor_bytes)
-      const text = await deps.fetchRoomText(pkg.room_id, deps.version, pkg.descriptor_bytes, inner.signal)
-      const actual = new TextEncoder().encode(text).length
-      if (actual > pkg.descriptor_bytes) throw new ContentError(`Описание зала больше объявленного: ${actual} > ${pkg.descriptor_bytes}`)
-      deps.budget.settle(key, actual)
-      const room = JSON.parse(text) as Room
+      const { room, bytes } = await deps.fetchRoom(pkg.room_id, deps.version, pkg.descriptor_bytes, inner.signal)
+      deps.budget.settle(key, bytes)
       if (room.id !== pkg.room_id) throw new ContentError(`Зал ${room.id} вместо ${pkg.room_id}`)
       return room
     }
@@ -77,7 +75,6 @@ export class RoomManager {
       const key = `asset:${asset.id}`
       reserve(key, asset.bytes)
       const blob = await deps.fetchAssetBlob(asset.id, deps.version, asset.bytes, inner.signal)
-      if (blob.size > asset.bytes) throw new ContentError(`Ресурс ${asset.id} больше объявленного: ${blob.size} > ${asset.bytes}`)
       deps.budget.settle(key, blob.size)
       const bitmap = await deps.decode(blob)
       if (inner.signal.aborted) {
@@ -89,14 +86,11 @@ export class RoomManager {
 
     const results = await Promise.allSettled([failFast(loadRoom()), ...pkg.assets.map((a) => failFast(loadAsset(a)))])
     signal.removeEventListener('abort', onOuterAbort)
-    // Первая по времени настоящая ошибка, а не AbortError соседей, которых она отменила.
-    const failure =
-      results.find((r) => r.status === 'rejected' && (r.reason as Error)?.name !== 'AbortError') ??
-      results.find((r) => r.status === 'rejected')
+    const failure = firstError ?? results.find((r): r is PromiseRejectedResult => r.status === 'rejected') ?? null
     if (failure || signal.aborted) {
       closeAll()
       releaseAll()
-      if (failure) throw (failure as PromiseRejectedResult).reason
+      if (failure) throw failure.reason
       throw abortError()
     }
 

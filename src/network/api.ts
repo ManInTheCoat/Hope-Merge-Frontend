@@ -6,6 +6,7 @@ import {
   type Manifest,
   type MeResponse,
   type Photo,
+  type Room,
   type User,
 } from './contract'
 
@@ -90,10 +91,11 @@ export async function fetchGenerations(guideId: string, before: string | null, s
   return (await apiFetch(`/guides/${encodeURIComponent(guideId)}/generations?limit=20${cursor}`, { signal })).json()
 }
 
-export async function fetchRoomText(roomId: string, version: string, maxBytes: number, signal?: AbortSignal): Promise<string> {
+/** Описание зала и точный размер полученного файла: бюджет учитывает именно его (api.md, «Учёт бюджета»). */
+export async function fetchRoom(roomId: string, version: string, maxBytes: number, signal?: AbortSignal): Promise<{ room: Room; bytes: number }> {
   const path = `/world/rooms/${encodeURIComponent(roomId)}?version=${encodeURIComponent(version)}`
-  const bytes = await readLimited(await apiFetch(path, { signal }), maxBytes)
-  return new TextDecoder().decode(bytes)
+  const raw = await readLimited(await apiFetch(path, { signal }), maxBytes)
+  return { room: JSON.parse(new TextDecoder().decode(raw)) as Room, bytes: raw.length }
 }
 
 export async function fetchAssetBlob(assetId: string, version: string, maxBytes: number, signal?: AbortSignal): Promise<Blob> {

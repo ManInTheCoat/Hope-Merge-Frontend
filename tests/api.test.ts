@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { ApiError, ContentError, fetchGenerations, fetchMe, readLimited, uploadPhoto } from '../src/network/api'
+import { ApiError, ContentError, fetchGenerations, fetchMe, fetchRoom, readLimited, uploadPhoto } from '../src/network/api'
 
 function streamResponse(chunks: number[], headers: Record<string, string> = {}) {
   let pulled = 0
@@ -96,6 +96,21 @@ test('uploadPhoto: POST /photos с Idempotency-Key и тем же FormData; 409 
     const err = await uploadPhoto(form, 'k1').catch((e) => e)
     expect(err).toBeInstanceOf(ApiError)
     expect(err.code).toBe('IDEMPOTENCY_CONFLICT')
+  } finally {
+    globalThis.fetch = orig
+  }
+})
+
+test('fetchRoom: BOM и битый UTF-8 в строке не ломают учёт — размер по сырым байтам', async () => {
+  const json = new TextEncoder().encode('{"id":"hall","title":"')
+  const tail = new TextEncoder().encode('"}')
+  const body = new Uint8Array([0xef, 0xbb, 0xbf, ...json, 0xff, ...tail])
+  const orig = globalThis.fetch
+  globalThis.fetch = (async () => new Response(body)) as unknown as typeof fetch
+  try {
+    const { room, bytes } = await fetchRoom('hall', 'v1', body.length)
+    expect(bytes).toBe(body.length)
+    expect(room.id).toBe('hall')
   } finally {
     globalThis.fetch = orig
   }
