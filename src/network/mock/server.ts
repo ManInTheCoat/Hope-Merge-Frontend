@@ -9,13 +9,15 @@ import {
   type Generation,
   type Photo,
   type Player,
-  type Pose,
   type ServerEnvelope,
   type ServerEventType,
   type ServerEvents,
   type User,
+  type Vec3,
 } from '../contract'
 import { wrapAngle } from '../../scene/input'
+import { checkPhotoForm, photoFingerprint } from './photoForm'
+import { loadMockState, saveMockState, type StoredAccount } from './storage'
 import { START_POSITION, START_ROOM_ID, WORLD_VERSION, type MockWorld } from './world'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -33,8 +35,10 @@ const CHAT_LIMIT = 5
 const CHAT_WINDOW_MS = 10_000
 /** Код, который браузер видит при отказе upgrade (например, HTTP 401 до открытия WS). */
 const ABNORMAL_CLOSE = 1006
+/** Позиция сохраняется раз в 5 секунд и при штатном отключении (api.md §2). */
+const POSE_SAVE_EVERY_MS = 5_000
 
-type Account = { user: User; password: string; pose: Pose }
+type Account = StoredAccount
 type Session = { account: Account }
 
 export type MockServer = {
@@ -56,12 +60,24 @@ function httpError(status: number, code: string, message: string): Response {
   return json(status, { error: { code, message, request_id } }, { 'X-Request-ID': request_id })
 }
 
-export function createMockServer(world: MockWorld): MockServer {
-  const accounts = new Map<string, Account>()
+export function createMockServer(world: MockWorld, storage: Storage | null = null): MockServer {
+  const stored = loadMockState(storage)
+  const accounts = new Map<string, Account>(stored.accounts.map((a) => [a.user.username, a]))
   const photos = new Map<string, { photo: Photo; blob: Blob; owner: string }>()
-  const idempotent = new Map<string, Photo>()
+  const idempotent = new Map<string, { photo: Photo; fingerprint: string }>()
   const generations = new Map<string, Generation[]>()
-  let session: Session | null = null
+  let session: Session | null = stored.session ? { account: accounts.get(stored.session)! } : null
+  let poseSavedAt = 0
+
+  /** Аккаунты, позы и сессия переживают перезагрузку страницы (у реального бэкенда — БД и cookie). */
+  function persist() {
+    poseSavedAt = Date.now()
+    saveMockState(storage, { accounts: [...accounts.values()], session: session?.account.user.username ?? null })
+  }
+
+  function persistPoseThrottled() {
+    if (Date.now() - poseSavedAt >= POSE_SAVE_EVERY_MS) persist()
+  }
   let socket: MockSocket | null = null
   /** Время отправки сообщений чата по user_id: окно не сбрасывается переподключением (api.md §9). */
   const chatSends = new Map<string, number[]>()
@@ -104,6 +120,7 @@ export function createMockServer(world: MockWorld): MockServer {
         }
         accounts.set(username, account)
         session = { account }
+        persist()
         return json(201, { user })
       }
       const account = accounts.get(String(body.username ?? '').toLowerCase())
@@ -111,11 +128,13 @@ export function createMockServer(world: MockWorld): MockServer {
         return httpError(401, 'INVALID_CREDENTIALS', 'Неверное имя или пароль')
       }
       session = { account }
+      persist()
       return json(200, { user: account.user })
     }
 
     if (method === 'POST' && path === '/auth/logout') {
       session = null
+      persist()
       socket?.serverClose(CloseCode.SessionExpired)
       return json(204)
     }
@@ -188,22 +207,41 @@ export function createMockServer(world: MockWorld): MockServer {
   async function createPhoto(req: Request, account: Account): Promise<Response> {
     const key = req.headers.get('Idempotency-Key') ?? ''
     if (!UUID_RE.test(key)) return httpError(400, 'VALIDATION_ERROR', 'Нужен Idempotency-Key (UUID v4)')
+    let form: FormData
+    try {
+      form = await req.formData()
+    } catch {
+      return httpError(400, 'VALIDATION_ERROR', 'Нужен multipart/form-data')
+    }
+    const invalid = checkPhotoForm(form)
+    if (invalid) return httpError(400, 'VALIDATION_ERROR', invalid)
+    const fingerprint = photoFingerprint(form)
     const existing = idempotent.get(`${account.user.id}:${key}`)
-    if (existing) return json(200, existing)
+    if (existing) {
+      if (existing.fingerprint !== fingerprint) return httpError(409, 'IDEMPOTENCY_CONFLICT', 'Ключ уже использован другим запросом')
+      return json(200, existing.photo)
+    }
     if (!socket?.ready) return httpError(409, 'GAME_NOT_READY', 'Игра не готова')
 
-    const form = await req.formData()
-    const file = form.get('image')
-    if (!(file instanceof Blob) || (file.type !== 'image/jpeg' && file.type !== 'image/webp')) {
+    const file = form.get('image') as Blob
+    if (file.type !== 'image/jpeg' && file.type !== 'image/webp') {
       return httpError(415, 'UNSUPPORTED_MEDIA_TYPE', 'Нужен JPEG или WebP')
     }
     if (file.size > 2 * 1024 * 1024) return httpError(413, 'PAYLOAD_TOO_LARGE', 'Файл больше 2 МиБ')
     if (Number(form.get('movement_epoch')) !== socket.epoch || form.get('room_id') !== account.pose.room_id) {
       return httpError(409, 'GAME_NOT_READY', 'Зал или epoch устарели')
     }
+    const exhibitId = form.get('exhibit_id')
+    if (typeof exhibitId === 'string') {
+      const ex = world.rooms.get(account.pose.room_id)!.room.exhibits.find((e) => e.id === exhibitId)
+      if (!ex) return httpError(404, 'NOT_FOUND', 'Нет такого экспоната')
+      const pos = socket.selfPosition()
+      if (!pos || Math.hypot(ex.position.x - pos.x, ex.position.z - pos.z) > ex.interaction_radius_m) {
+        return httpError(403, 'OUT_OF_RANGE', 'Слишком далеко от экспоната')
+      }
+    }
 
     const id = newId('photo')
-    const exhibitId = form.get('exhibit_id')
     const photo: Photo = {
       id,
       owner_id: account.user.id,
@@ -220,7 +258,7 @@ export function createMockServer(world: MockWorld): MockServer {
       created_at: now(),
     }
     photos.set(id, { photo, blob: file, owner: account.user.id })
-    idempotent.set(`${account.user.id}:${key}`, photo)
+    idempotent.set(`${account.user.id}:${key}`, { photo, fingerprint })
     return json(201, photo)
   }
 
@@ -388,6 +426,10 @@ export function createMockServer(world: MockWorld): MockServer {
       this.later(() => this.serverClose(code), 0)
     }
 
+    selfPosition(): Vec3 | null {
+      return this.self ? { ...this.self.position } : null
+    }
+
     serverClose(code: number) {
       if (this.readyState === 3) return
       this.readyState = 3
@@ -396,6 +438,7 @@ export function createMockServer(world: MockWorld): MockServer {
       this.timers.forEach((t) => clearTimeout(t))
       this.timers.clear()
       if (socket === this) socket = null
+      persist() // штатное отключение сохраняет позицию; синхронно, поэтому успевает внутри pagehide
       this.emit(new CloseEvent('close', { code, wasClean: code === 1000 }), this.onclose)
     }
 
@@ -442,7 +485,7 @@ export function createMockServer(world: MockWorld): MockServer {
           self.position = { x: p.position.x, y: 0, z: p.position.z }
           self.rotation = p.rotation
           acc.pose = { room_id: self.room_id, position: self.position, rotation: self.rotation }
-          return
+          return persistPoseThrottled()
         }
         case 'world.enter': {
           if (!this.ready) return this.error('GAME_NOT_READY', 'Игра не готова', rid)
@@ -464,6 +507,7 @@ export function createMockServer(world: MockWorld): MockServer {
             ack_seq: 0,
           })
           acc.pose = { room_id: self.room_id, position: { ...spawn }, rotation: { yaw: 0, pitch: 0 } }
+          persist() // переход сохраняется до подтверждения (api.md §2)
           return this.send_('world.entered', { self, current_room: world.rooms.get(door.target_room_id)!.pkg }, rid)
         }
         case 'chat.send': {
