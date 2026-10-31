@@ -8,6 +8,8 @@ export type Hud = {
   showMessage(text: string, ms?: number): void
   showClickOverlay(visible: boolean, onClick?: () => void): void
   showLoading(state: LoadingState): void
+  /** Кнопка «Выйти»; null скрывает её. */
+  showLogout(onClick: (() => void) | null): void
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, parent: HTMLElement): HTMLElementTagNameMap[K] {
@@ -45,6 +47,12 @@ export function createHud(root: HTMLElement): Hud {
   retry.textContent = 'Повторить'
   let retryHandler: (() => void) | undefined
   retry.addEventListener('click', () => retryHandler?.())
+
+  const logoutButton = el('button', 'hud-logout', root)
+  logoutButton.hidden = true
+  logoutButton.textContent = 'Выйти'
+  let logoutHandler: (() => void) | null = null
+  logoutButton.addEventListener('click', () => logoutHandler?.())
 
   let messageTimer: ReturnType<typeof setTimeout> | undefined
   let hintText: string | null = null
@@ -90,6 +98,10 @@ export function createHud(root: HTMLElement): Hud {
       retry.hidden = state.kind !== 'error'
       loadingText.textContent = state.kind === 'loading' ? state.text : state.message
       retryHandler = state.kind === 'error' ? state.onRetry : undefined
+    },
+    showLogout(onClick) {
+      logoutHandler = onClick
+      logoutButton.hidden = onClick === null
     },
   }
 }
