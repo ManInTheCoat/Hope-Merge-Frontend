@@ -19,6 +19,8 @@ export type Hud = {
   /** Затемнение на время перехода; промис — когда анимация закончилась. */
   fade(on: boolean): Promise<void>
   fadeText(text: string | null): void
+  /** Вспышка фотоаппарата. */
+  flash(): void
 }
 
 const FADE_MS = 200
@@ -52,6 +54,8 @@ export function createHud(root: HTMLElement): Hud {
   const fadeLabel = el('div', 'hud-fade-text', fadeLayer)
   fadeLabel.hidden = true
   let fadeOn = false
+
+  const flashLayer = el('div', 'hud-flash', root)
 
   const overlay = el('div', 'hud-overlay', root)
   overlay.hidden = true
@@ -157,6 +161,11 @@ export function createHud(root: HTMLElement): Hud {
         const timer = setTimeout(done, FADE_FALLBACK_MS)
         fadeLayer.addEventListener('transitionend', done)
       })
+    },
+    flash() {
+      flashLayer.classList.remove('hud-flash--on')
+      void flashLayer.offsetWidth // перезапуск анимации при частых снимках
+      flashLayer.classList.add('hud-flash--on')
     },
     fadeText(text) {
       fadeLabel.hidden = text === null

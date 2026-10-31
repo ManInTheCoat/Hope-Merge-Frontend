@@ -45,7 +45,7 @@ canvas {
 }
 
 .hud-message {
-  bottom: 48px;
+  bottom: 96px; /* над строкой подсказок, даже если она в две строки */
 }
 
 .hud-card {
@@ -508,4 +508,106 @@ canvas {
 
 .guide-close-btn:hover {
   background: rgba(255, 255, 255, 0.08);
+}
+
+.hud-flash {
+  position: absolute;
+  inset: 0;
+  background: #fff;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.hud-flash--on {
+  animation: hud-flash 150ms ease-out;
+}
+
+@keyframes hud-flash {
+  from {
+    opacity: 0.6;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/* Ширина не заходит ни на чат слева (до 420 px + отступ), ни на карточку фото справа. */
+.hud-controls {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  max-width: max(240px, calc(100vw - 904px));
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px 10px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(20, 20, 24, 0.6);
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.hud-controls kbd {
+  display: inline-block;
+  min-width: 14px;
+  padding: 0 4px;
+  border: 1px solid #888;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  text-align: center;
+}
+
+.photo-card {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  width: 200px;
+  padding: 8px;
+  border-radius: 10px;
+  background: rgba(20, 20, 24, 0.92);
+  font-size: 13px;
+  opacity: 1;
+  transition: opacity 400ms ease;
+  pointer-events: auto;
+}
+
+.photo-card--fading {
+  opacity: 0;
+}
+
+.photo-card-image {
+  display: block;
+  width: 100%;
+  border-radius: 6px;
+}
+
+.photo-card-status {
+  margin: 6px 0;
+}
+
+.photo-card--error .photo-card-status {
+  color: #e07a6a;
+}
+
+.photo-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.photo-card-button {
+  padding: 3px 10px;
+  border: none;
+  border-radius: 5px;
+  background: #c9a25e;
+  color: #1a1a1a;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
 }
