@@ -47,9 +47,12 @@ export function createHud(root: HTMLElement): Hud {
   retry.addEventListener('click', () => retryHandler?.())
 
   let messageTimer: ReturnType<typeof setTimeout> | undefined
+  let hintText: string | null = null
 
   return {
     showHint(text) {
+      if (text === hintText) return // вызывается каждый кадр: не трогаем DOM без изменений
+      hintText = text
       hint.hidden = text === null
       if (text !== null) hint.textContent = text
     },

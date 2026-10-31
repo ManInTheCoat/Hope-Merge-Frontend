@@ -9,6 +9,7 @@ import { CLIENT_SPEED_FACTOR, moveVector, shouldSendMove } from './scene/input'
 import { buildRoom, type BuiltRoom } from './scene/roomBuilder'
 import { pickExhibit } from './scene/targeting'
 import { createHud } from './ui/hud'
+import { MoveHistory } from './world/moveHistory'
 import { RoomManager } from './world/RoomManager'
 
 const MOVE_SEND_INTERVAL_MS = 100
@@ -27,6 +28,8 @@ type Session = {
   ready: boolean
   moveTimer: ReturnType<typeof setInterval> | null
   lastMoveSentAt: number | null
+  selfId: string
+  history: MoveHistory
 }
 
 function errorMessage(e: unknown): string {
@@ -60,6 +63,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
 
   let session: Session | null = null
   let cardFor: Exhibit | null = null
+  let cardToken = 0
   let target: Exhibit | null = null
 
   const controls = new FirstPersonControls(renderer.domElement, (locked) => {
@@ -79,6 +83,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
 
   function closeCard() {
     cardFor = null
+    cardToken++
     hud.showCard(null)
   }
 
@@ -107,9 +112,11 @@ export async function startGame(host: HTMLElement): Promise<void> {
     const now = performance.now()
     if (force && !shouldSendMove(s.lastMoveSentAt, now, MIN_MOVE_GAP_MS)) return
     s.lastMoveSentAt = now
+    const seq = ++s.seq
+    s.history.record(seq, s.pos)
     s.socket.send('player.move', {
       movement_epoch: s.epoch,
-      seq: ++s.seq,
+      seq,
       position: { x: s.pos.x, y: 0, z: s.pos.z },
       rotation: { yaw: controls.yaw, pitch: controls.pitch },
     })
@@ -129,13 +136,30 @@ export async function startGame(host: HTMLElement): Promise<void> {
       ready: false,
       moveTimer: null,
       lastMoveSentAt: null,
+      selfId: '',
+      history: new MoveHistory(),
     }
     session = s
     hud.showLoading({ kind: 'loading', text: 'Загрузка зала…' })
     try {
       if (import.meta.env.VITE_USE_MOCK === 'true') await ensureDevSession()
       const { socket, snapshot } = await GameSocket.open()
+      if (session !== s || s.ac.signal.aborted) {
+        socket.close()
+        return
+      }
       s.socket = socket
+      s.selfId = snapshot.self.user_id
+      socket.on('players.state', ({ players }) => {
+        const self = players.find((p) => p.user_id === s.selfId)
+        if (!s.ready || !self || self.movement_epoch !== s.epoch) return
+        const corrected = s.history.reconcile(self.ack_seq, self.position)
+        if (corrected) s.pos = corrected
+      })
+      socket.on('error', (body, env) => {
+        // Ошибки без request_id относятся к player.move: сервер отклонил структуру шага.
+        if (!env.request_id) console.warn('Сервер отклонил player.move:', body.code, body.message)
+      })
       socket.onClose(() => {
         if (session !== s || s.ac.signal.aborted) return
         teardown(s)
@@ -174,6 +198,10 @@ export async function startGame(host: HTMLElement): Promise<void> {
     }
   }
 
+  renderer.domElement.addEventListener('click', () => {
+    if (cardFor) closeCard()
+  })
+
   controls.onInteract = async () => {
     if (cardFor) return closeCard()
     const s = session
@@ -181,6 +209,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
     const exhibit = target
     sendMove(s, true) // серверная позиция должна быть свежей, иначе у границы 3 м придёт OUT_OF_RANGE
     cardFor = exhibit
+    const token = ++cardToken
     hud.showHint(null)
     hud.showCard({
       title: exhibit.title,
@@ -190,7 +219,8 @@ export async function startGame(host: HTMLElement): Promise<void> {
     try {
       await s.socket.request('exhibit.inspect', { exhibit_id: exhibit.id }, 'exhibit.inspected')
     } catch (e) {
-      if (cardFor === exhibit) closeCard()
+      if (session !== s) return // связь потеряна: об этом уже сообщает экран ошибки
+      if (cardToken === token) closeCard()
       hud.showMessage(errorMessage(e))
     }
   }
@@ -216,7 +246,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
       camera.getWorldDirection(dir)
       target = cardFor
         ? null
-        : pickExhibit({ eye: camera.position, dir, playerXZ: s.pos }, s.exhibits)
+        : pickExhibit({ eye: camera.position, dir, playerXZ: s.pos, colliders: s.built.colliders }, s.exhibits)
       hud.showHint(!cardFor && target && controls.locked ? `E — осмотреть: ${target.title}` : null)
     }
     renderer.render(scene, camera)
