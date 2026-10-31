@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
-import { pickDoor, pickExhibit } from '../src/scene/targeting'
-import type { Door, Exhibit } from '../src/network/contract'
+import { pickDoor, pickExhibit, pickTarget } from '../src/scene/targeting'
+import type { Door, Exhibit, Guide } from '../src/network/contract'
 
 const ex = (id: string, x: number, z: number, rotation_y = 0): Exhibit => ({
   id,
@@ -91,4 +91,51 @@ test('pickDoor: из двух в радиусе — ближайшая', () => {
 
 test('pickDoor: высота не учитывается', () => {
   expect(pickDoor({ x: 0, z: 0 }, [door('d', 1, 0, 5)])?.id).toBe('d')
+})
+
+const guide = (x: number, z: number): Guide => ({
+  id: 'g',
+  display_name: 'Куратор',
+  subtitle: '',
+  position: { x, y: 0, z },
+  rotation_y: 0,
+  interaction_radius_m: 3,
+})
+const g = guide(0, -3)
+
+test('смотрит на гида с 2 м — цель гид', () => {
+  expect(pickTarget(look(0, -1), [], [g])).toEqual({ kind: 'guide', guide: g })
+})
+
+test('гид за спиной — нет цели', () => {
+  expect(pickTarget(look(0, -1, { x: 0, y: 0, z: 1 }), [], [g])).toBeNull()
+})
+
+test('гид дальше 2.8 м — нет цели', () => {
+  expect(pickTarget(look(0, 0), [], [g])).toBeNull()
+})
+
+test('взгляд мимо гида в сторону — нет цели', () => {
+  expect(pickTarget(look(0, -1, { x: 0.6, y: 0, z: -0.8 }), [], [g])).toBeNull()
+})
+
+test('стена между камерой и гидом — нет цели', () => {
+  const wall = { minX: -2, maxX: 2, minY: 0, maxY: 3, minZ: -2.1, maxZ: -1.9 }
+  expect(pickTarget({ ...look(0, -1), colliders: [wall] }, [], [g])).toBeNull()
+})
+
+test('экспонат ближе гида по лучу — цель экспонат', () => {
+  // экспонат на высоте глаз в 1 м перед камерой, гид за ним
+  const near = { ...ex('near', 0, -2), position: { x: 0, y: 1.65, z: -2 } }
+  expect(pickTarget(look(0, -1), [near], [g])).toEqual({ kind: 'exhibit', exhibit: near })
+})
+
+test('гид ближе экспоната по лучу — цель гид', () => {
+  const far = { ...ex('far', 0, -3.5), position: { x: 0, y: 1.65, z: -3.5 } }
+  expect(pickTarget(look(0, -1), [far], [g])).toEqual({ kind: 'guide', guide: g })
+})
+
+test('без гидов pickTarget совпадает с pickExhibit', () => {
+  expect(pickTarget(look(0, -5.95), [main], [])).toEqual({ kind: 'exhibit', exhibit: main })
+  expect(pickTarget(look(0, -4), [main], [])).toBeNull()
 })
