@@ -118,16 +118,23 @@ export function pickTarget(input: LookInput, exhibits: Exhibit[], guides: Guide[
   return best
 }
 
-/** Ближайшая дверь в радиусе подсказки по XZ от `door.position` (там же меряет сервер). */
-export function pickDoor(playerXZ: Vec2, doors: Door[], radiusM: number = DOOR_HINT_RADIUS_M): Door | null {
+/** Высота глаз над позицией игрока (api.md §1): от неё сервер проверяет видимость двери. */
+const EYE_HEIGHT_M = 1.65
+
+/**
+ * Ближайшая дверь в радиусе подсказки по XZ от `door.position` (там же меряет сервер), если отрезок
+ * от глаз до точки двери не проходит сквозь блок: иначе сервер откажет в переходе.
+ */
+export function pickDoor(playerXZ: Vec2, doors: Door[], colliders: Aabb[] = [], radiusM: number = DOOR_HINT_RADIUS_M): Door | null {
   let best: Door | null = null
   let bestD = Infinity
+  const eye = { x: playerXZ.x, y: EYE_HEIGHT_M, z: playerXZ.z }
   for (const d of doors) {
     const dist = Math.hypot(d.position.x - playerXZ.x, d.position.z - playerXZ.z)
-    if (dist <= radiusM && dist < bestD) {
-      best = d
-      bestD = dist
-    }
+    if (dist > radiusM || dist >= bestD) continue
+    if (colliders.some((box) => segmentHitsBox(eye, d.position, box))) continue
+    best = d
+    bestD = dist
   }
   return best
 }

@@ -139,3 +139,14 @@ test('без гидов pickTarget совпадает с pickExhibit', () => {
   expect(pickTarget(look(0, -5.95), [main], [])).toEqual({ kind: 'exhibit', exhibit: main })
   expect(pickTarget(look(0, -4), [main], [])).toBeNull()
 })
+
+test('pickDoor: дверь за стеной не подсвечивается (сервер проверяет видимость от глаз)', () => {
+  const wall = { minX: -2, maxX: 2, minY: 0, maxY: 4, minZ: 0.4, maxZ: 0.6 }
+  expect(pickDoor({ x: 0, z: 0 }, [door('d', 0, 1)], [wall])).toBeNull()
+  expect(pickDoor({ x: 0, z: 0 }, [door('d', 0, 1)], [])?.id).toBe('d')
+})
+
+test('pickDoor: пол под точкой двери не закрывает её', () => {
+  const floor = { minX: -10, maxX: 10, minY: -0.2, maxY: 0, minZ: -10, maxZ: 10 }
+  expect(pickDoor({ x: 0, z: 0 }, [door('d', 0, 1)], [floor])?.id).toBe('d')
+})

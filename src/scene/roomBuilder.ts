@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import type { Room } from '../network/contract'
-import { surfacesToColliders, type Aabb, type Bounds2 } from './collision'
+import { closestOnBox, surfacesToColliders, type Aabb, type Bounds2, type Vec2 } from './collision'
 import { makeLabel } from './labels'
 
 export type BuiltRoom = {
@@ -20,14 +20,15 @@ const DOOR_DEPTH = 0.05
 /** Дальше этого от стены дверь не прижимаем: контент без стены рядом рисуем прямо в точке двери. */
 const DOOR_WALL_SEARCH_M = 1.5
 
-type XZ = { x: number; z: number }
-
-/** Точка на грани ближайшей стены и нормаль этой грани в сторону двери (внутрь зала). */
-export function doorPlacement(x: number, z: number, colliders: Aabb[]): { point: XZ; normal: XZ } {
-  let best: { point: XZ; normal: XZ; dist: number } | null = null
+/**
+ * Точка на грани ближайшей стены и нормаль этой грани в сторону двери (внутрь зала). Стена — блок не ниже
+ * двери: к постаменту или скамье дверь не прижимаем.
+ */
+export function doorPlacement(x: number, z: number, colliders: Aabb[], center: Vec2): { point: Vec2; normal: Vec2 } {
+  let best: { point: Vec2; normal: Vec2; dist: number } | null = null
   for (const b of colliders) {
-    const cx = Math.min(Math.max(x, b.minX), b.maxX)
-    const cz = Math.min(Math.max(z, b.minZ), b.maxZ)
+    if (b.maxY < DOOR_HEIGHT) continue
+    const { x: cx, z: cz } = closestOnBox({ x, z }, b)
     const dist = Math.hypot(x - cx, z - cz)
     if (dist === 0 || dist > DOOR_WALL_SEARCH_M || (best && dist >= best.dist)) continue
     const dx = x - cx
@@ -38,8 +39,10 @@ export function doorPlacement(x: number, z: number, colliders: Aabb[]): { point:
   }
   if (best) return { point: best.point, normal: best.normal }
   // Стены рядом нет: ставим в точку двери лицом к центру зала.
-  const len = Math.hypot(x, z) || 1
-  return { point: { x, z }, normal: { x: -x / len, z: -z / len } }
+  const dx = center.x - x
+  const dz = center.z - z
+  const len = Math.hypot(dx, dz) || 1
+  return { point: { x, z }, normal: { x: dx / len, z: dz / len } }
 }
 
 export function buildRoom(room: Room, bitmaps: Map<string, ImageBitmap>, labelFn: LabelFn = makeLabel): BuiltRoom {
@@ -89,9 +92,10 @@ export function buildRoom(room: Room, bitmaps: Map<string, ImageBitmap>, labelFn
   }
 
   const colliders = surfacesToColliders(room.surfaces)
+  const center = { x: (room.bounds.min.x + room.bounds.max.x) / 2, z: (room.bounds.min.z + room.bounds.max.z) / 2 }
   for (const d of room.doors) {
     // Позиция двери — точка взаимодействия перед стеной (api.md); саму дверь ставим на ближайшую стену.
-    const { point, normal } = doorPlacement(d.position.x, d.position.z, colliders)
+    const { point, normal } = doorPlacement(d.position.x, d.position.z, colliders, center)
     const door = new THREE.Group()
     door.userData = { kind: 'door', id: d.id }
     door.position.set(point.x, 0, point.z)

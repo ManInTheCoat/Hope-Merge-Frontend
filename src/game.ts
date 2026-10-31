@@ -723,7 +723,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
           ? null
           : pickTarget({ eye: camera.position, dir, playerXZ: s.pos, colliders: s.built.colliders }, s.exhibits, s.guides)
         // Экспонат или гид в прицеле важнее двери рядом.
-        doorTarget = cardFor || target ? null : pickDoor(s.pos, s.doors)
+        doorTarget = cardFor || target ? null : pickDoor(s.pos, s.doors, s.built.colliders)
         const hint =
           target?.kind === 'exhibit'
             ? `E — осмотреть: ${target.exhibit.title}`

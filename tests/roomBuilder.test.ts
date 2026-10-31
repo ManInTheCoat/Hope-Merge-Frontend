@@ -141,3 +141,30 @@ test('дверь смотрит внутрь зала', () => {
   const e = facing(doorById(built, 'door_e'))
   expect(e.x).toBeLessThan(-0.99)
 })
+
+test('низкий постамент рядом с точкой двери не считается стеной', () => {
+  const r: Room = {
+    ...room,
+    bounds: { min: { x: 10, y: 0, z: 10 }, max: { x: 20, y: 4, z: 20 } },
+    surfaces: [{ id: 'plinth', position: { x: 13.1, y: 0.5, z: 12 }, size: { x: 1, y: 1, z: 1 }, color: '#ccc', collidable: true }],
+    doors: [{ id: 'd', target_room_id: 'x', label: 'Д', position: { x: 12, y: 0, z: 12 }, interaction_radius_m: 1.5 }],
+    exhibits: [],
+    guides: [],
+  }
+  const d = doorById(buildRoom(r, new Map(), stubLabel), 'd')
+  expect(d.position.x).toBe(12)
+  expect(d.position.z).toBe(12)
+})
+
+test('без стены рядом дверь смотрит к центру зала, а не к началу координат', () => {
+  const r: Room = {
+    ...room,
+    bounds: { min: { x: 10, y: 0, z: 10 }, max: { x: 20, y: 4, z: 20 } },
+    surfaces: [],
+    doors: [{ id: 'd', target_room_id: 'x', label: 'Д', position: { x: 12, y: 0, z: 15 }, interaction_radius_m: 1.5 }],
+    exhibits: [],
+    guides: [],
+  }
+  const f = facing(doorById(buildRoom(r, new Map(), stubLabel), 'd'))
+  expect(f.x).toBeGreaterThan(0.99) // центр (15,15) — по +X
+})
