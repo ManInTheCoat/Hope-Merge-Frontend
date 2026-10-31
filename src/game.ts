@@ -13,6 +13,7 @@ import { createChat } from './ui/chat'
 import { chatKeyAction, chatLineText } from './ui/chatLog'
 import { createHud } from './ui/hud'
 import { createLoginScreen } from './ui/login'
+import { AssetBudget } from './world/AssetBudget'
 import { MoveHistory } from './world/moveHistory'
 import { RoomManager } from './world/RoomManager'
 
@@ -25,6 +26,7 @@ type Session = {
   ac: AbortController
   socket: GameSocket | null
   manifest: Manifest | null
+  budget: AssetBudget | null
   built: BuiltRoom | null
   exhibits: Exhibit[]
   pos: Vec2
@@ -64,10 +66,11 @@ export async function startGame(host: HTMLElement): Promise<void> {
   camera.rotation.order = 'YXZ'
 
   const hud = createHud(host)
-  // Версия мира известна только после snapshot, поэтому менеджер создаётся на каждое подключение.
-  const makeRooms = (version: string) =>
+  // Версия мира и лимит кеша известны только после snapshot и манифеста, поэтому менеджер — на каждое подключение.
+  const makeRooms = (version: string, budget: AssetBudget) =>
     new RoomManager({
       version,
+      budget,
       fetchRoomText,
       fetchAssetBlob,
       // flipY для ImageBitmap задаётся при декодировании: UNPACK_FLIP_Y_WEBGL на него не действует.
@@ -221,6 +224,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
       ac: new AbortController(),
       socket: null,
       manifest: null,
+      budget: null,
       built: null,
       exhibits: [],
       pos: { x: 0, z: 0 },
@@ -280,8 +284,9 @@ export async function startGame(host: HTMLElement): Promise<void> {
       const manifest = await fetchManifest(s.ac.signal)
       if (manifest.world_version !== snapshot.world_version) throw new Error('Версия мира не совпадает, обновите страницу')
       s.manifest = manifest
+      s.budget = new AssetBudget(manifest.client_cache_limit_bytes)
 
-      rooms = makeRooms(snapshot.world_version)
+      rooms = makeRooms(snapshot.world_version, s.budget)
       const loaded = await rooms.load(snapshot.current_room, s.ac.signal)
       if (s.ac.signal.aborted) return
       s.built = buildRoom(loaded.room, loaded.bitmaps)
