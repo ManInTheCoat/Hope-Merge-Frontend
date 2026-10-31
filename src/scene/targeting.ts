@@ -1,8 +1,10 @@
-import type { Exhibit, Vec3 } from '../network/contract'
+import type { Door, Exhibit, Vec3 } from '../network/contract'
 import type { Aabb, Vec2 } from './collision'
 
 /** Подсказку «E» показываем с запасом: сервер проверяет ≤ 3 м по своей, чуть отстающей позиции. */
 export const HINT_RADIUS_M = 2.8
+/** Подсказка двери: сервер пускает до 1,5 м по XZ, но видит позицию с задержкой — берём запас. */
+export const DOOR_HINT_RADIUS_M = 1.3
 
 /** Пересекает ли отрезок a→b внутренность бокса (метод плит). Касание концами не считается. */
 export function segmentHitsBox(a: Vec3, b: Vec3, box: Aabb): boolean {
@@ -61,6 +63,20 @@ export function pickExhibit(
 
     best = e
     bestT = t
+  }
+  return best
+}
+
+/** Ближайшая дверь в радиусе подсказки по XZ от `door.position` (там же меряет сервер). */
+export function pickDoor(playerXZ: Vec2, doors: Door[], radiusM: number = DOOR_HINT_RADIUS_M): Door | null {
+  let best: Door | null = null
+  let bestD = Infinity
+  for (const d of doors) {
+    const dist = Math.hypot(d.position.x - playerXZ.x, d.position.z - playerXZ.z)
+    if (dist <= radiusM && dist < bestD) {
+      best = d
+      bestD = dist
+    }
   }
   return best
 }
