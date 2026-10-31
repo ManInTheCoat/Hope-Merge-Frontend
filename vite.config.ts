@@ -5,8 +5,7 @@ const backend = 'http://localhost:8080'
 export default defineConfig({
   server: {
     proxy: {
-      '/api': { target: backend, changeOrigin: true },
-      '/ws': { target: backend.replace('http', 'ws'), ws: true },
+      '/api': { target: backend, changeOrigin: true, ws: true },
     },
   },
 })
