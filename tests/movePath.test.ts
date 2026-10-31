@@ -67,3 +67,53 @@ test('без движения отправлять нечего', () => {
   expect(path.take(open, R, 0.36)).toBeNull()
   expect(path.pending).toBe(false)
 })
+
+import { moveCylinder } from '../src/scene/collision'
+
+/**
+ * Игрок прижимается к блоку (давит в +X, идя на −Z), затем целится в точку сразу за углом (0, 0):
+ * траектория плотно огибает угол. Отправка раз в 100 мс, как в game.ts.
+ */
+function corner(fps: number, ang: number): { sends: number; bad: number } {
+  const world: MoveWorld = { colliders: [{ minX: 0, maxX: 1, minY: 0, maxY: 3, minZ: 0, maxZ: 1 }], bounds: { minX: -10, maxX: 10, minZ: -10, maxZ: 10 } }
+  let pos = { x: -0.301, z: 0.5 }
+  const path = new MovePath()
+  path.reset(pos)
+  let sent = path.sent
+  let bad = 0
+  let sends = 0
+  let t = 0
+  let lastSend = 0
+  const dt = 1 / fps
+  for (let f = 0; f < fps * 1.5; f++) {
+    t += dt * 1000
+    let dx = 0.5 - pos.x
+    let dz = -0.01 - ang / 100 - pos.z
+    if (pos.z > 0.05) {
+      dx = 0.3
+      dz = -1
+    }
+    const n = Math.hypot(dx, dz)
+    pos = moveCylinder(pos, { x: (dx / n) * 3.6 * dt, z: (dz / n) * 3.6 * dt }, world, R)
+    path.record(pos)
+    if (t - lastSend >= 100 - 1e-9) {
+      const el = t - lastSend
+      lastSend = t
+      const q = path.take(world, R, 3.6 * Math.min(el / 1000, 0.25)) ?? path.sent
+      sends++
+      if (!segmentClear(sent, q, world, R)) bad++
+      sent = q
+    }
+  }
+  return { sends, bad }
+}
+
+test('плотный обход угла на реальной коллизии: ни один отправленный отрезок не срезает угол', () => {
+  for (const fps of [30, 60, 120]) {
+    for (const ang of [20, 45, 70]) {
+      const { sends, bad } = corner(fps, ang)
+      expect(sends).toBeGreaterThan(10)
+      expect([fps, ang, bad]).toEqual([fps, ang, 0])
+    }
+  }
+})
