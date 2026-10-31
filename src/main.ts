@@ -1,6 +1,10 @@
 import * as THREE from 'three'
 import './style.css'
 
+if (import.meta.env.VITE_USE_MOCK === 'true') {
+  import('./network/mock').then((m) => m.installMocks())
+}
+
 const renderer = new THREE.WebGLRenderer({ antialias: true })
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5))
 document.querySelector<HTMLDivElement>('#app')!.appendChild(renderer.domElement)
