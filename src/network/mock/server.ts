@@ -16,9 +16,9 @@ import {
   type Vec3,
 } from '../contract'
 import { wrapAngle } from '../../scene/input'
-import { mockSpeedOk, mockSweep } from './geometry'
+import { mockSpeedOk, mockSweep, mockValidPose } from './geometry'
 import { checkPhotoForm, photoFingerprint } from './photoForm'
-import { loadMockState, repairPose, saveMockState, type StoredAccount } from './storage'
+import { loadMockState, mergeMockState, repairPose, saveMockState, type StoredAccount } from './storage'
 import { START_POSITION, START_ROOM_ID, WORLD_VERSION, type MockWorld } from './world'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -68,6 +68,8 @@ function fieldsOk(value: unknown, spec: Record<string, string>): boolean {
 export type MockServer = {
   fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
   WebSocket: typeof WebSocket
+  /** Закрыть текущее игровое соединение кодом `code`: ручная проверка переподключения (api.md §4). */
+  drop(code: number): void
 }
 
 function json(status: number, body?: unknown, headers: Record<string, string> = {}): Response {
@@ -90,7 +92,11 @@ export function createMockServer(world: MockWorld, storage: Storage | null = nul
   const stored = loadMockState(storage)
   const startPose = { room_id: START_ROOM_ID, position: { ...START_POSITION }, rotation: { yaw: 0, pitch: 0 } }
   // Мир мог измениться с прошлого запуска: позу из хранилища приводим к допустимой.
-  stored.accounts.forEach((a) => (a.pose = repairPose(a.pose, (id) => world.rooms.has(id), startPose)))
+  const poseOk = (id: string, p: Vec3) => {
+    const room = world.rooms.get(id)?.room
+    return !!room && mockValidPose(room, p)
+  }
+  stored.accounts.forEach((a) => (a.pose = repairPose(a.pose, poseOk, startPose)))
   const accounts = new Map<string, Account>(stored.accounts.map((a) => [a.user.username, a]))
   const photos = new Map<string, { photo: Photo; blob: Blob; owner: string }>()
   const idempotent = new Map<string, { photo: Photo; fingerprint: string }>()
@@ -102,7 +108,17 @@ export function createMockServer(world: MockWorld, storage: Storage | null = nul
   /** Аккаунты, позы и сессия переживают перезагрузку страницы (у реального бэкенда — БД и cookie). */
   function persist() {
     poseSavedAt = Date.now()
-    saveMockState(storage, { accounts: [...accounts.values()], session: session?.account.user.username ?? null })
+    const mine = { accounts: [...accounts.values()], session: session?.account.user.username ?? null }
+    saveMockState(storage, mergeMockState(loadMockState(storage), mine))
+  }
+
+  /** Аккаунты, зарегистрированные в другой вкладке после запуска этой. */
+  function refreshAccounts() {
+    for (const a of loadMockState(storage).accounts) {
+      if (accounts.has(a.user.username)) continue
+      a.pose = repairPose(a.pose, poseOk, startPose)
+      accounts.set(a.user.username, a)
+    }
   }
 
   function persistPoseThrottled() {
@@ -134,6 +150,7 @@ export function createMockServer(world: MockWorld, storage: Storage | null = nul
           ? { username: 'string', display_name: 'string', password: 'string' }
           : { username: 'string', password: 'string' }
       if (!fieldsOk(body, spec)) return httpError(400, 'VALIDATION_ERROR', 'Некорректные данные')
+      refreshAccounts()
       // Новая сессия отзывает прежнюю из cookie и закрывает её WS (api.md §2).
       socket?.serverClose(CloseCode.SessionExpired)
       if (path === '/auth/register') {
@@ -270,7 +287,7 @@ export function createMockServer(world: MockWorld, storage: Storage | null = nul
     }
     const invalid = checkPhotoForm(form)
     if (invalid) return httpError(400, 'VALIDATION_ERROR', invalid)
-    const fingerprint = photoFingerprint(form)
+    const fingerprint = await photoFingerprint(form)
     const existing = idempotent.get(`${account.user.id}:${key}`)
     if (existing) {
       if (existing.fingerprint !== fingerprint) return httpError(409, 'IDEMPOTENCY_CONFLICT', 'Ключ уже использован другим запросом')
@@ -286,6 +303,8 @@ export function createMockServer(world: MockWorld, storage: Storage | null = nul
     if (Number(form.get('movement_epoch')) !== socket.epoch || form.get('room_id') !== account.pose.room_id) {
       return httpError(409, 'GAME_NOT_READY', 'Зал или epoch устарели')
     }
+    const caption = String(form.get('caption') ?? '').trim()
+    if ([...caption].length > 200 || caption.includes('\u0000')) return httpError(400, 'VALIDATION_ERROR', 'Подпись до 200 символов')
     const exhibitId = form.get('exhibit_id')
     if (typeof exhibitId === 'string') {
       const ex = world.rooms.get(account.pose.room_id)!.room.exhibits.find((e) => e.id === exhibitId)
@@ -300,14 +319,14 @@ export function createMockServer(world: MockWorld, storage: Storage | null = nul
     const photo: Photo = {
       id,
       owner_id: account.user.id,
-      caption: String(form.get('caption') ?? ''),
+      caption,
       room_id: account.pose.room_id,
       exhibit_id: typeof exhibitId === 'string' ? exhibitId : null,
       published: false,
       image_url: `${API_BASE}/photos/${id}/image`,
       image_bytes: file.size,
       thumbnail_url: `${API_BASE}/photos/${id}/thumbnail`,
-      thumbnail_bytes: file.size,
+      thumbnail_bytes: Math.min(file.size, 128 * 1024), // миниатюра мока — условная, но в пределе api.md
       width: 1920,
       height: 1080,
       created_at: now(),
@@ -731,5 +750,5 @@ export function createMockServer(world: MockWorld, storage: Storage | null = nul
   } as unknown as typeof WebSocket
   Object.assign(WebSocketMock, { CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3 })
 
-  return { fetch: fetchMock, WebSocket: WebSocketMock }
+  return { fetch: fetchMock, WebSocket: WebSocketMock, drop: (code) => socket?.serverClose(code) }
 }

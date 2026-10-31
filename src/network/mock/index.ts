@@ -12,4 +12,6 @@ export async function installMocks(): Promise<void> {
   const server = createMockServer(await buildWorld(), storage)
   window.fetch = server.fetch
   window.WebSocket = server.WebSocket
+  // Ручная проверка переподключения из консоли: __mock.drop(1012), __mock.drop(4009)…
+  ;(window as unknown as { __mock: { drop(code: number): void } }).__mock = { drop: (code) => server.drop(code) }
 }

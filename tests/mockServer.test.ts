@@ -232,3 +232,51 @@ test('второй вопрос до завершения первого — GUI
   await tick()
   expect(j.inbox.find((e) => e.request_id === rid)?.payload.code).toBe('GUIDE_BUSY')
 })
+
+class MemStorage {
+  private m = new Map<string, string>()
+  getItem(k: string) {
+    return this.m.get(k) ?? null
+  }
+  setItem(k: string, v: string) {
+    this.m.set(k, v)
+  }
+}
+
+test('две вкладки на моке не затирают аккаунты друг друга', async () => {
+  const storage = new MemStorage() as unknown as Storage
+  const tabA = await mockServer(storage)
+  const tabB = await mockServer(storage)
+  await tabA.register('alice')
+  await tabB.register('bob')
+  const login = await tabB.http('POST', '/auth/login', { username: 'alice', password: 'password1' })
+  expect(login.status).toBe(200)
+  const tabC = await mockServer(storage)
+  expect((await tabC.http('POST', '/auth/login', { username: 'bob', password: 'password1' })).status).toBe(200)
+})
+
+test('drop(code) закрывает текущее соединение этим кодом', async () => {
+  const j = await joined()
+  j.server.drop(1012)
+  await tick()
+  expect(j.closes).toEqual([1012])
+})
+
+async function postPhoto(j: Awaited<ReturnType<typeof joined>>, caption: string) {
+  const fd = new FormData()
+  fd.append('image', new File([new Uint8Array(200_000)], 'shot.jpg', { type: 'image/jpeg' }))
+  fd.append('room_id', 'hall_antiquity')
+  fd.append('movement_epoch', String(j.snapshot.self.movement_epoch))
+  fd.append('caption', caption)
+  return j.server.fetch('http://localhost/api/v1/photos', { method: 'POST', headers: { 'Idempotency-Key': crypto.randomUUID() }, body: fd })
+}
+
+test('фото: подпись обрезается и не длиннее 200, миниатюра не больше 128 КиБ', async () => {
+  const j = await joined()
+  const ok = await postPhoto(j, '  x  ')
+  expect(ok.status).toBe(201)
+  const photo = (await ok.json()) as { caption: string; thumbnail_bytes: number }
+  expect(photo.caption).toBe('x')
+  expect(photo.thumbnail_bytes).toBeLessThanOrEqual(131072)
+  expect((await postPhoto(j, 'я'.repeat(201))).status).toBe(400)
+})
