@@ -101,3 +101,43 @@ test('dispose освобождает геометрии, материалы и �
   expect(disposed.material).toBe(materials.size)
   expect(disposed.texture).toBe(2)
 })
+
+const walled: Room = {
+  ...room,
+  surfaces: [
+    { id: 'wall_s', position: { x: 0, y: 2, z: 8.1 }, size: { x: 12.4, y: 4, z: 0.2 }, color: '#ccc', collidable: true },
+    { id: 'wall_e', position: { x: 6.1, y: 2, z: 0 }, size: { x: 0.2, y: 4, z: 16 }, color: '#ccc', collidable: true },
+  ],
+  doors: [
+    { id: 'door_s', target_room_id: 'x', label: 'Юг', position: { x: 0, y: 0, z: 7.7 }, interaction_radius_m: 1.5 },
+    { id: 'door_e', target_room_id: 'x', label: 'Восток', position: { x: 5.7, y: 0, z: 1 }, interaction_radius_m: 1.5 },
+  ],
+}
+
+function doorById(built: ReturnType<typeof buildRoom>, id: string): THREE.Object3D {
+  let found: THREE.Object3D | null = null
+  built.group.traverse((o) => {
+    if (o.userData.kind === 'door' && o.userData.id === id) found = o
+  })
+  return found!
+}
+
+const facing = (o: THREE.Object3D) => ({ x: Math.sin(o.rotation.y), z: Math.cos(o.rotation.y) })
+
+test('дверь стоит вплотную к ближайшей стене, а не в точке взаимодействия', () => {
+  const built = buildRoom(walled, new Map(), stubLabel)
+  const s = doorById(built, 'door_s')
+  expect(Math.abs(s.position.z - 8.0)).toBeLessThan(0.05)
+  expect(s.position.x).toBe(0)
+  const e = doorById(built, 'door_e')
+  expect(Math.abs(e.position.x - 6.0)).toBeLessThan(0.05)
+  expect(e.position.z).toBe(1)
+})
+
+test('дверь смотрит внутрь зала', () => {
+  const built = buildRoom(walled, new Map(), stubLabel)
+  const s = facing(doorById(built, 'door_s'))
+  expect(s.z).toBeLessThan(-0.99)
+  const e = facing(doorById(built, 'door_e'))
+  expect(e.x).toBeLessThan(-0.99)
+})

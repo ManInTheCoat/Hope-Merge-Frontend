@@ -53,3 +53,19 @@ test('картина с rotation_y = π/2 смотрит в +X', () => {
   const input = { eye: { x: -3.95, y: 1.65, z: 0 }, dir: { x: -1, y: 0, z: 0 }, playerXZ: { x: -3.95, z: 0 } }
   expect(pickExhibit(input, [side])?.id).toBe('side')
 })
+
+test('стена между камерой и картиной убирает цель', () => {
+  // Перегородка высотой 4 м между глазом (z=-5.95) и картиной (z=-7.95).
+  const partition = { minX: -3, maxX: 3, minY: 0, maxY: 4, minZ: -7.1, maxZ: -6.9 }
+  expect(pickExhibit({ ...look(0, -5.95), colliders: [partition] }, [main])).toBeNull()
+})
+
+test('стена, на которой висит картина, не мешает', () => {
+  const northWall = { minX: -6.2, maxX: 6.2, minY: 0, maxY: 4, minZ: -8.2, maxZ: -8.0 }
+  expect(pickExhibit({ ...look(0, -5.95), colliders: [northWall] }, [main])?.id).toBe('main')
+})
+
+test('низкий барьер ниже линии взгляда не мешает', () => {
+  const rail = { minX: -3, maxX: 3, minY: 0, maxY: 1, minZ: -7.1, maxZ: -6.9 }
+  expect(pickExhibit({ ...look(0, -5.95), colliders: [rail] }, [main])?.id).toBe('main')
+})
