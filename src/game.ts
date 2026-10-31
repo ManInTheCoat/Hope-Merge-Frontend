@@ -12,6 +12,7 @@ import { RemotePlayersView } from './players/view'
 import { moveCylinder, type Vec2 } from './scene/collision'
 import { FirstPersonControls, typingInField } from './scene/controls'
 import { CLIENT_SPEED_FACTOR, moveVector, shouldSendMove } from './scene/input'
+import { HandCamera } from './scene/handCamera'
 import { buildRoom, type BuiltRoom } from './scene/roomBuilder'
 import { pickDoor, pickTarget, type Target } from './scene/targeting'
 import { createChat } from './ui/chat'
@@ -91,6 +92,9 @@ export async function startGame(host: HTMLElement): Promise<void> {
   camera.rotation.order = 'YXZ'
 
   const hud = createHud(host)
+  const hand = new HandCamera()
+  /** Сглаженная доля скорости ходьбы для покачивания фотоаппарата. */
+  let walkBlend = 0
   // Версия мира и лимит кеша известны только после snapshot и манифеста, поэтому менеджер — на каждое подключение.
   const makeRooms = (version: string, budget: AssetBudget) =>
     new RoomManager({
@@ -234,6 +238,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
     renderer.render(scene, camera)
     const frame = copyFrame(renderer.domElement)
     hud.flash()
+    hand.shoot(performance.now())
     const exhibitId = target?.kind === 'exhibit' ? target.exhibit.id : null
     let blob: Blob
     try {
@@ -353,6 +358,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
   function resize() {
     renderer.setSize(window.innerWidth, window.innerHeight)
     camera.aspect = window.innerWidth / window.innerHeight
+    hand.setAspect(camera.aspect)
     camera.updateProjectionMatrix()
   }
   window.addEventListener('resize', resize)
@@ -678,12 +684,16 @@ export async function startGame(host: HTMLElement): Promise<void> {
     // новый зал должен быть виден уже с точки появления, а не со старой позиции у двери.
     if (s?.manifest && s.built) {
       const m = s.manifest.movement
+      let walked = 0
       if (s.ready && controls.locked && !cardFor && !s.photoBusy) {
         const delta = moveVector(controls.keys.state, controls.yaw, m.max_speed_mps * CLIENT_SPEED_FACTOR, dt)
         if (delta.x !== 0 || delta.z !== 0) {
+          const before = s.pos
           s.pos = moveCylinder(s.pos, delta, { colliders: s.built.colliders, bounds: s.built.bounds }, m.player_radius_m, m.player_height_m)
+          if (dt > 0) walked = Math.hypot(s.pos.x - before.x, s.pos.z - before.z) / dt / m.max_speed_mps
         }
       }
+      walkBlend += (Math.min(walked, 1) - walkBlend) * Math.min(1, dt * 8)
       camera.position.set(s.pos.x, m.camera_height_m, s.pos.z)
       camera.rotation.set(controls.pitch, controls.yaw, 0, 'YXZ')
 
@@ -708,6 +718,9 @@ export async function startGame(host: HTMLElement): Promise<void> {
     }
     controlsBar.setVisible(!!s?.ready && controls.locked && !chat.isOpen && !guidePanel.isOpen)
     renderer.render(scene, camera)
+    hand.visible = !!s?.built
+    hand.update(now, walkBlend)
+    hand.render(renderer)
   })
 
   // Штатное закрытие: сервер сохраняет последнюю позицию (api.md §2).
