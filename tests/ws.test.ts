@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test'
+import { expect, spyOn, test } from 'bun:test'
 import { GameSocket } from '../src/network/ws'
 
 class FakeWebSocket {
@@ -18,8 +18,8 @@ class FakeWebSocket {
   close() {
     this.serverClose(1000)
   }
-  serverSend(type: string, payload: unknown, request_id?: string) {
-    const env = { type, event_id: 'e', server_time: 't', ...(request_id ? { request_id } : {}), payload }
+  serverSend(type: string, payload: unknown, request_id?: string, event_id: string = crypto.randomUUID()) {
+    const env = { type, event_id, server_time: 't', ...(request_id ? { request_id } : {}), payload }
     this.onmessage?.({ data: JSON.stringify(env) })
   }
   serverClose(code: number) {
@@ -111,4 +111,23 @@ test('open отклоняется по тайм-ауту, если snapshot не
   const fake = FakeWebSocket.last
   await expect(p).rejects.toThrow('SNAPSHOT_TIMEOUT')
   expect(fake.readyState).toBe(3)
+})
+
+test('событие с уже виденным event_id не доставляется повторно', async () => {
+  const { socket, fake } = await opened()
+  let n = 0
+  socket.on('player.left', () => n++)
+  fake.serverSend('player.left', { user_id: 'u' }, undefined, 'dup')
+  fake.serverSend('player.left', { user_id: 'u' }, undefined, 'dup')
+  expect(n).toBe(1)
+})
+
+test('неизвестный тип и битый JSON не роняют сокет и пишут предупреждение', async () => {
+  const { socket, fake } = await opened()
+  const warn = spyOn(console, 'warn').mockImplementation(() => {})
+  fake.serverSend('world.rooms_available', {})
+  fake.onmessage?.({ data: '{not json' })
+  expect(warn).toHaveBeenCalledTimes(2)
+  expect(socket.isOpen).toBe(true)
+  warn.mockRestore()
 })

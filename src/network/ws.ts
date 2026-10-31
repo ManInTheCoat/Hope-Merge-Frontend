@@ -10,6 +10,8 @@ import {
 import { uuidV4 } from './uuid'
 
 const SNAPSHOT_TIMEOUT_MS = 15_000
+/** Сколько последних event_id помним для отбрасывания повторов. */
+const SEEN_EVENTS_LIMIT = 1000
 
 type Handler = (payload: never, env: never) => void
 
@@ -17,6 +19,7 @@ export class GameSocket {
   private handlers = new Map<string, Set<Handler>>()
   private closeHandlers = new Set<(code: number) => void>()
   private closed = false
+  private seenEvents = new Set<string>()
 
   private readonly ws: WebSocket
 
@@ -125,9 +128,26 @@ export class GameSocket {
     try {
       env = JSON.parse(data)
     } catch {
+      console.warn('Нечитаемое сообщение WS')
       return
     }
-    this.handlers.get(env.type)?.forEach((h) => (h as (p: unknown, e: unknown) => void)(env.payload, env))
+    if (typeof env?.type !== 'string') {
+      console.warn('Сообщение WS без type')
+      return
+    }
+    if (typeof env.event_id === 'string') {
+      if (this.seenEvents.has(env.event_id)) return
+      this.seenEvents.add(env.event_id)
+      if (this.seenEvents.size > SEEN_EVENTS_LIMIT) {
+        this.seenEvents.delete(this.seenEvents.values().next().value!)
+      }
+    }
+    const handlers = this.handlers.get(env.type)
+    if (!handlers?.size) {
+      console.warn('Неизвестное событие WS:', env.type)
+      return
+    }
+    handlers.forEach((h) => (h as (p: unknown, e: unknown) => void)(env.payload, env))
   }
 
   private handleClose(code: number): void {
