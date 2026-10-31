@@ -14,7 +14,7 @@ export type Hud = {
   /** Кнопка «Выйти»; null скрывает её. */
   showLogout(onClick: (() => void) | null): void
   /** Строка кеша и строка памяти; null скрывает обе. */
-  showCache(state: { used: number; limit: number } | null): void
+  showCache(state: { used: number; total: number; limit: number } | null): void
   /** Вызывается каждый кадр: DOM меняется только при изменении чисел. */
   showMemory(textures: number, geometries: number): void
   /** Затемнение на время перехода; промис — когда анимация закончилась. */
@@ -160,7 +160,7 @@ export function createHud(root: HTMLElement): Hud {
         memoryKey = ''
         return
       }
-      cacheLine.textContent = formatCache(state.used, state.limit)
+      cacheLine.textContent = formatCache(state.used, state.total, state.limit)
       cache.classList.toggle('hud-cache--over', state.used > state.limit)
     },
     showMemory(textures, geometries) {

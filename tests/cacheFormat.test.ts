@@ -1,16 +1,18 @@
 import { expect, test } from 'bun:test'
 import { formatCache, formatMemory } from '../src/ui/cacheFormat'
 
-test('пример из плана', () => {
-  expect(formatCache(3_460_301, 44_040_192)).toBe('Кеш: 7,9% (3,3 / 42,0 МБ)')
+const MIB = 1024 * 1024
+
+test('процент считается от всего мира, лимит виден рядом', () => {
+  expect(formatCache(1.2 * MIB, 47 * MIB, 4.7 * MIB)).toBe('Кеш: 2,6% мира (1,2 / 47,0 МБ, лимит 10%)')
 })
 
 test('ноль', () => {
-  expect(formatCache(0, 4_404_019)).toBe('Кеш: 0,0% (0,0 / 4,2 МБ)')
+  expect(formatCache(0, 42 * MIB, 4.2 * MIB)).toBe('Кеш: 0,0% мира (0,0 / 42,0 МБ, лимит 10%)')
 })
 
-test('больше 100%', () => {
-  expect(formatCache(5_000_000, 4_404_019).startsWith('Кеш: 113,5%')).toBe(true)
+test('превышение лимита видно по проценту', () => {
+  expect(formatCache(5 * MIB, 42 * MIB, 4.2 * MIB).startsWith('Кеш: 11,9% мира')).toBe(true)
 })
 
 test('строка памяти', () => {

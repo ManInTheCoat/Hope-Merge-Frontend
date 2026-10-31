@@ -4,8 +4,10 @@ const SENSITIVITY = 0.002
 const PITCH_LIMIT = Math.PI / 2 - 0.01
 
 export function typingInField(): boolean {
-  const el = document.activeElement
-  return el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement
+  const el = document.activeElement as (Element & { isContentEditable?: boolean }) | null
+  return (
+    el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement || !!el?.isContentEditable
+  )
 }
 
 export class FirstPersonControls {

@@ -448,6 +448,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
       resumeControls(false)
       return
     }
+    if (action === 'focus') return chat.focus()
     chat.open()
     controls.enabled = false
     controls.keys.clear()
@@ -698,8 +699,9 @@ export async function startGame(host: HTMLElement): Promise<void> {
       s.manifest = manifest
       s.budget = new AssetBudget(manifest.client_cache_limit_bytes)
       s.photo = new LastPhoto(s.budget)
-      hud.showCache({ used: 0, limit: s.budget.limit })
-      s.budgetOff = s.budget.onChange((used, limit) => hud.showCache({ used, limit }))
+      const total = manifest.total_content_bytes
+      hud.showCache({ used: 0, total, limit: s.budget.limit })
+      s.budgetOff = s.budget.onChange((used, limit) => hud.showCache({ used, total, limit }))
 
       rooms = makeRooms(snapshot.world_version, s.budget)
       const loaded = await rooms.load(snapshot.current_room, s.ac.signal)
@@ -798,7 +800,8 @@ export async function startGame(host: HTMLElement): Promise<void> {
               : doorTarget
                 ? `E — перейти: ${doorTarget.label}`
                 : null
-        hud.showHint(!cardFor && controls.locked ? hint : null)
+        // Действие недоступно (фото, переход, переподключение, открытая панель) — подсказку не показываем.
+        hud.showHint(!cardFor && controls.locked && !actionsLocked(s) && !guidePanel.isOpen ? hint : null)
       }
       if (s.roomId) view.update(s.players, s.roomId, now, camera)
       // Табличка — дочерний узел повёрнутой фигуры гида: мировой поворот к камере задаём через родителя.
@@ -807,7 +810,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
         label.quaternion.copy(labelParentQ.invert().multiply(camera.quaternion))
       }
     }
-    controlsBar.setVisible(!!s?.ready && controls.locked && !chat.isOpen && !guidePanel.isOpen)
+    controlsBar.setVisible(!actionsLocked(s) && controls.locked && !chat.isOpen && !guidePanel.isOpen && !cardFor)
     renderer.render(scene, camera)
     hand.visible = !!s?.built
     hand.update(now, walkBlend)

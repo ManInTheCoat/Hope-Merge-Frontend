@@ -8,6 +8,8 @@ const NEUTRAL_COLOR = '#c9c4bb'
 export type Chat = {
   add(line: ChatLine): void
   open(): void
+  /** Вернуть фокус в поле открытого чата. */
+  focus(): void
   close(): void
   readonly isOpen: boolean
   clear(): void
@@ -143,6 +145,9 @@ export function createChat(root: HTMLElement, opts: ChatOptions): Chat {
       log.push(line)
       render()
       wake()
+    },
+    focus() {
+      if (isOpen) input.focus()
     },
     open() {
       if (isOpen) return

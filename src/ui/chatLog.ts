@@ -39,10 +39,13 @@ export type ChatKeyContext = {
   blocked: boolean
 }
 
-/** Что делает клавиша на уровне документа: открыть чат, закрыть его или ничего. */
-export function chatKeyAction(code: string, ctx: ChatKeyContext): 'open' | 'close' | null {
+/** Что делает клавиша на уровне документа: открыть чат, закрыть его, вернуть фокус в поле или ничего. */
+export function chatKeyAction(code: string, ctx: ChatKeyContext): 'open' | 'close' | 'focus' | null {
   // Esc ловим и вне поля: фокус мог уйти кликом мимо, а чат при этом остаётся открытым.
   if (code === 'Escape') return ctx.chatOpen ? 'close' : null
   if (code !== 'Enter' && code !== 'NumpadEnter') return null
-  return ctx.chatOpen || ctx.typing || ctx.blocked ? null : 'open'
+  if (ctx.typing) return null
+  // Чат открыт, а фокус ушёл кликом мимо поля: Enter возвращает его в поле.
+  if (ctx.chatOpen) return 'focus'
+  return ctx.blocked ? null : 'open'
 }

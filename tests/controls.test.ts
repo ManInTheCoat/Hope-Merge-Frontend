@@ -6,6 +6,7 @@ g.document ??= Object.assign(new EventTarget(), { pointerLockElement: null, acti
 g.window ??= new EventTarget()
 g.HTMLInputElement ??= class {}
 g.HTMLTextAreaElement ??= class {}
+g.HTMLSelectElement ??= class {}
 
 const { FirstPersonControls } = await import('../src/scene/controls')
 
@@ -23,4 +24,17 @@ test('E вызывает взаимодействие и гасит нажати
   expect(calls).toBe(1)
   expect(e.defaultPrevented).toBe(true)
   controls.enabled = false
+})
+
+test('typingInField: select и contenteditable — тоже ввод', async () => {
+  const { typingInField } = await import('../src/scene/controls')
+  const doc = document as unknown as { activeElement: unknown }
+  const prev = doc.activeElement
+  doc.activeElement = new (globalThis as unknown as { HTMLSelectElement: new () => object }).HTMLSelectElement()
+  expect(typingInField()).toBe(true)
+  doc.activeElement = { isContentEditable: true }
+  expect(typingInField()).toBe(true)
+  doc.activeElement = { isContentEditable: false }
+  expect(typingInField()).toBe(false)
+  doc.activeElement = prev
 })
