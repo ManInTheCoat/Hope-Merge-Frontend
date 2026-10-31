@@ -471,8 +471,11 @@ export async function startGame(host: HTMLElement): Promise<void> {
     hud.showCard(null)
   }
 
-  /** `keepChat` — переподключение: строки общего чата остаются на экране. */
-  function teardown(s: Session | null, keepChat = false) {
+  /**
+   * `reconnecting` — смена соединения: строки общего чата остаются, затемнение не снимается
+   * (прежний зал освобождается уже под ним).
+   */
+  function teardown(s: Session | null, reconnecting = false) {
     if (!s) return
     s.ready = false
     s.ac.abort()
@@ -480,8 +483,10 @@ export async function startGame(host: HTMLElement): Promise<void> {
     s.budgetOff?.()
     s.budgetOff = null
     hud.showCache(null)
-    void hud.fade(false)
-    hud.fadeText(null)
+    if (!reconnecting) {
+      void hud.fade(false)
+      hud.fadeText(null)
+    }
     if (s.moveTimer) clearInterval(s.moveTimer)
     s.socket?.close()
     s.photo?.release()
@@ -494,7 +499,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
     s.players.clear()
     view.clear()
     chat.close()
-    if (!keepChat) chat.clear()
+    if (!reconnecting) chat.clear()
     guidePanel.close()
     asks.reset()
     if (session === s) session = null
@@ -645,8 +650,9 @@ export async function startGame(host: HTMLElement): Promise<void> {
     }
 
     if (old) {
-      teardown(old, true)
+      // Сначала затемнение, потом освобождение прежнего мира: без вспышки пустой сцены.
       await hud.fade(true)
+      teardown(old, true)
       hud.fadeText('Загрузка зала…')
     }
     const s = newSession()
@@ -711,14 +717,20 @@ export async function startGame(host: HTMLElement): Promise<void> {
 
       await socket.request('world.ready', { world_version: snapshot.world_version, movement_epoch: s.epoch }, 'world.ready')
       if (!isCurrent() || session !== s) throw new Error('CANCELLED')
+      // С этого момента закрытие сокета — обрыв живой игры: его обработает lose(), даже во время снятия затемнения.
+      s.joined = true
     } catch (e) {
       if (session === s) teardown(s, true)
       else s.socket?.close()
+      hud.fadeText(null)
+      void hud.fade(false)
       return { ok: false, code: closedCode, error: e }
     }
     hud.fadeText(null)
     await hud.fade(false)
     hud.showLoading(null)
+    // Связь могла оборваться, пока снималось затемнение: lose() уже запустил повторы, управление не включаем.
+    if (s.lost || session !== s) return { ok: false, code: closedCode, error: new Error('SOCKET_CLOSED') }
     becomeReady(s)
     return { ok: true }
   }
