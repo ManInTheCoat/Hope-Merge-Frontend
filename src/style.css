@@ -611,3 +611,27 @@ canvas {
   font-weight: 600;
   cursor: pointer;
 }
+
+.hud-link-banner {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 14px;
+  border: 1px solid #a65;
+  border-radius: 8px;
+  background: rgba(40, 20, 16, 0.85);
+  z-index: 20;
+}
+
+.hud-link-banner-retry {
+  padding: 3px 10px;
+  border: 1px solid #c97;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}

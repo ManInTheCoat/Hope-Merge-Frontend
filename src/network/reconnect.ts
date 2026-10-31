@@ -43,8 +43,8 @@ export type LinkState =
 export type ConnectResult = { ok: true } | { ok: false; code: number | null; error: unknown }
 
 export type ReconnectDeps = {
-  /** Полный вход в мир: сокет, snapshot, зал, world.ready. */
-  connect(): Promise<ConnectResult>
+  /** Полный вход в мир: сокет, snapshot, зал, world.ready. `isCurrent` — false, если попытку уже отменили (выход). */
+  connect(isCurrent: () => boolean): Promise<ConnectResult>
   /** Проверка сессии после неудачной попытки (api.md §4: 401 → вход, сетевой сбой → повтор). */
   checkMe(): Promise<'ok' | 'unauthenticated' | 'network'>
   schedule(fn: () => void, ms: number): () => void
@@ -116,7 +116,7 @@ export class ReconnectLoop {
 
   private async run(gen: number): Promise<void> {
     this.deps.onState({ kind: 'connecting', attempt: this.attempt })
-    const result = await this.deps.connect()
+    const result = await this.deps.connect(() => gen === this.generation)
     if (gen !== this.generation) return
     if (result.ok) {
       this.attempt = 0

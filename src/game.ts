@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { ContentError, fetchAssetBlob, fetchGenerations, fetchManifest, fetchMe, fetchRoom, logout, uploadPhoto } from './network/api'
-import { CloseCode, type Door, type ErrorBody, type Exhibit, type Guide, type Manifest } from './network/contract'
+import { type Door, type ErrorBody, type Exhibit, type Guide } from './network/contract'
+import { closeAction, ReconnectLoop, type ConnectResult, type LinkState } from './network/reconnect'
 import { uuidV4 } from './network/uuid'
 import { GameSocket } from './network/ws'
 import { canvasEncoder, copyFrame, encodeUnderLimit, fitFrame } from './photo/frame'
@@ -9,11 +10,11 @@ import { downloadBlob, LastPhoto } from './photo/lastPhoto'
 import { photoErrorText, savePhoto, type Shot } from './photo/save'
 import { PlayerRegistry } from './players/registry'
 import { RemotePlayersView } from './players/view'
-import { activeColliders, moveCylinder, type MoveWorld, type Vec2 } from './scene/collision'
+import { activeColliders, moveCylinder } from './scene/collision'
 import { FirstPersonControls, typingInField } from './scene/controls'
 import { CLIENT_SPEED_FACTOR, moveVector, shouldSendMove } from './scene/input'
 import { HandCamera } from './scene/handCamera'
-import { buildRoom, type BuiltRoom } from './scene/roomBuilder'
+import { buildRoom } from './scene/roomBuilder'
 import { pickDoor, pickTarget, type Target } from './scene/targeting'
 import { createChat } from './ui/chat'
 import { createControlsBar } from './ui/controlsBar'
@@ -23,11 +24,11 @@ import { panelKeyAction } from './ui/guideKeys'
 import { createGuidePanel } from './ui/guidePanel'
 import { userErrorText } from './ui/errorText'
 import { createHud } from './ui/hud'
+import { linkView } from './ui/linkView'
 import { createLoginScreen } from './ui/login'
 import { createPhotoCard } from './ui/photoCard'
 import { AssetBudget } from './world/AssetBudget'
-import { MoveHistory } from './world/moveHistory'
-import { MovePath } from './world/movePath'
+import { applySelf, newSession, unloadRoom, type Session } from './world/session'
 import { RoomManager, type LoadedRoom } from './world/RoomManager'
 
 const MOVE_SEND_INTERVAL_MS = 100
@@ -39,41 +40,11 @@ const ASK_ACCEPT_TIMEOUT_MS = 10_000
 const GUIDE_CANCEL_TIMEOUT_MS = 10_000
 /** Без world.entered за это время считаем подтверждение потерянным и переподключаемся (api.md, «Переход»). */
 const ENTER_TIMEOUT_MS = 10_000
+/** Аномальное закрытие (1006): так считаем потерю связи, обнаруженную самим клиентом. */
+const ABNORMAL_CLOSE = 1006
 /** Подпись на затемнении появляется, только если зал грузится дольше этого. */
 const FADE_TEXT_DELAY_MS = 400
 
-type Session = {
-  ac: AbortController
-  socket: GameSocket | null
-  manifest: Manifest | null
-  budget: AssetBudget | null
-  /** Отписка HUD от бюджета этой сессии. */
-  budgetOff: (() => void) | null
-  built: BuiltRoom | null
-  /** Коллайдеры зала на высоте игрока и границы: считаются один раз при постройке. */
-  moveWorld: MoveWorld | null
-  exhibits: Exhibit[]
-  guides: Guide[]
-  doors: Door[]
-  pos: Vec2
-  epoch: number
-  seq: number
-  ready: boolean
-  moveTimer: ReturnType<typeof setInterval> | null
-  lastMoveSentAt: number | null
-  selfId: string
-  history: MoveHistory
-  /** Траектория с прошлой отправки: отправляем её точки, а не хорду через угол. */
-  path: MovePath
-  /** Прошлая отправка остановилась на промежуточной точке: следующую шлём, не дожидаясь таймера. */
-  pathBehind: boolean
-  players: PlayerRegistry
-  roomId: string | null
-  /** Последний снимок; создаётся вместе с бюджетом подключения. */
-  photo: LastPhoto | null
-  /** Идут съёмка или загрузка фото: движение и переходы заблокированы. */
-  photoBusy: boolean
-}
 
 export async function startGame(host: HTMLElement): Promise<void> {
   const renderer = new THREE.WebGLRenderer({ antialias: true })
@@ -191,7 +162,11 @@ export async function startGame(host: HTMLElement): Promise<void> {
     if (controls.locked) document.exitPointerLock()
   }
 
-  const loginScreen = createLoginScreen(host, () => void connect())
+  const loginScreen = createLoginScreen(host, () => {
+    firstEntry = true
+    returningEntry = false
+    void loop.connectNow()
+  })
 
   const controlsBar = createControlsBar(host)
   /** Снимок, который показывает карточка: «Повторить» отправляет его же с тем же ключом. */
@@ -275,6 +250,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
   }
 
   function showLogin() {
+    loop.stop()
     teardown(session)
     hud.showLoading(null)
     hud.showLogout(null)
@@ -282,7 +258,9 @@ export async function startGame(host: HTMLElement): Promise<void> {
   }
 
   async function onLogout() {
+    loop.stop()
     teardown(session)
+    onLinkState({ kind: 'login' }, false)
     hud.showLogout(null)
     hud.showLoading({ kind: 'loading', text: 'Выход…' })
     // Ждём ответа: иначе поздний logout отзовёт уже новую сессию после быстрого повторного входа.
@@ -290,17 +268,94 @@ export async function startGame(host: HTMLElement): Promise<void> {
     showLogin()
   }
 
-  /** Старт и повтор: при живой сессии сразу в мир, иначе экран входа. */
+  /** Старт страницы: при живой сессии сразу в мир, иначе экран входа. */
   async function enterWorld(): Promise<void> {
     hud.showLoading({ kind: 'loading', text: 'Подключение…' })
     let me
     try {
       me = await fetchMe()
     } catch {
-      return hud.showLoading({ kind: 'error', message: 'Сервер недоступен', onRetry: () => void enterWorld() })
+      hud.showLoading(null)
+      return loop.handleClose(ABNORMAL_CLOSE) // сервер недоступен: повторы по расписанию
     }
-    if (me) await connect(true)
-    else showLogin()
+    if (!me) return showLogin()
+    returningEntry = true
+    await loop.connectNow()
+  }
+
+  // --- Соединение: вход, обрыв, переподключение (api.md §4) ---
+
+  /** Ещё ни разу не вошли в игру после входа в аккаунт: попытки — это вход, а не переподключение. */
+  let firstEntry = true
+  /** Вход по живой сессии (перезагрузка страницы): игрок возвращается на своё место. */
+  let returningEntry = false
+  let linkState: LinkState = { kind: 'login' }
+  let linkTicker: ReturnType<typeof setInterval> | null = null
+  const linkActions = {
+    retryNow: () => loop.retryNow(),
+    enterWorld: () => {
+      firstEntry = true
+      void loop.connectNow()
+    },
+    reload: () => location.reload(),
+  }
+
+  const loop = new ReconnectLoop({
+    connect: (isCurrent) => connectOnce(isCurrent),
+    async checkMe() {
+      try {
+        return (await fetchMe()) ? 'ok' : 'unauthenticated'
+      } catch {
+        return 'network'
+      }
+    },
+    schedule: (fn, ms) => {
+      const t = setTimeout(fn, ms)
+      return () => clearTimeout(t)
+    },
+    now: () => Date.now(),
+    onState: (state) => onLinkState(state),
+  })
+
+  function renderLink() {
+    hud.showLink(linkView(linkState, Date.now(), firstEntry), linkActions)
+  }
+
+  function onLinkState(state: LinkState, react = true) {
+    linkState = state
+    if (linkTicker) clearInterval(linkTicker)
+    linkTicker = state.kind === 'waiting' ? setInterval(renderLink, 250) : null
+    if (react) {
+      if (state.kind === 'online') firstEntry = false
+      else if (state.kind === 'login') showLogin()
+      else if (state.kind === 'replaced' || state.kind === 'update' || state.kind === 'stopped') {
+        teardown(session)
+        hud.showLoading(null)
+        hud.showLogout(() => void onLogout())
+      } else if (state.kind === 'waiting' && !session) hud.showLoading(null) // вход не удался: вместо экрана загрузки — баннер
+    }
+    renderLink()
+  }
+
+  /**
+   * Связь с живой игрой потеряна (закрытие сервером, обрыв, потеря подтверждения перехода).
+   * При временной ошибке зал остаётся на экране, управление и команды заблокированы до переподключения.
+   */
+  function lose(s: Session, code: number) {
+    if (s.lost || session !== s) return
+    s.lost = true
+    if (closeAction(code) === 'retry') {
+      blockForTransition(s)
+      chat.close()
+      asks.reset() // сервер отменяет генерацию при разрыве (api.md §7)
+      lastShot = null
+      photoCard.hide()
+      controlsBar.setVisible(false)
+      hud.showClickOverlay(false)
+      if (controls.locked) document.exitPointerLock()
+      s.socket?.close()
+    } else teardown(s)
+    loop.handleClose(code)
   }
 
   document.addEventListener('keydown', (e) => {
@@ -365,7 +420,8 @@ export async function startGame(host: HTMLElement): Promise<void> {
     hud.showCard(null)
   }
 
-  function teardown(s: Session | null) {
+  /** `keepChat` — переподключение: строки общего чата остаются на экране. */
+  function teardown(s: Session | null, keepChat = false) {
     if (!s) return
     s.ready = false
     s.ac.abort()
@@ -383,17 +439,13 @@ export async function startGame(host: HTMLElement): Promise<void> {
     photoCard.hide()
     controlsBar.setVisible(false)
     if (controls.locked) document.exitPointerLock() // иначе клик по кнопке «Повторить» уходит в захваченный canvas
-    if (s.built) {
-      scene.remove(s.built.group)
-      s.built.dispose()
-    }
+    unloadRoom(s, scene, rooms)
     s.players.clear()
     view.clear()
     chat.close()
-    chat.clear()
+    if (!keepChat) chat.clear()
     guidePanel.close()
     asks.reset()
-    rooms?.unload()
     if (session === s) session = null
     controls.enabled = false
     closeCard()
@@ -417,6 +469,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
 
   function becomeReady(s: Session) {
     s.ready = true
+    s.joined = true
     s.moveTimer = setInterval(() => sendMove(s), MOVE_SEND_INTERVAL_MS)
     const dialogOpen = chat.isOpen || guidePanel.isOpen
     controls.enabled = !dialogOpen
@@ -442,7 +495,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
     const manager = rooms
     const manifest = s.manifest
     if (!socket || !manager || !manifest) return
-    const alive = () => session === s && !s.ac.signal.aborted
+    const alive = () => session === s && !s.ac.signal.aborted && !s.lost
     sendMove(s, true) // сервер меряет расстояние до двери по своей позиции: она должна быть свежей
     blockForTransition(s)
     const faded = hud.fade(true)
@@ -452,8 +505,9 @@ export async function startGame(host: HTMLElement): Promise<void> {
       entered = await socket.request('world.enter', { door_id: door.id, movement_epoch: s.epoch }, 'world.entered', ENTER_TIMEOUT_MS)
     } catch (e) {
       if (!alive()) return
-      if (e instanceof Error && e.message === 'SOCKET_CLOSED') return // экран ошибки покажет onClose
-      if (e instanceof Error && e.message === 'REQUEST_TIMEOUT') return void connect() // фактический зал придёт в snapshot
+      if (e instanceof Error && e.message === 'SOCKET_CLOSED') return // обрыв обработает onClose
+      // Подтверждение потеряно: фактический зал придёт в snapshot после переподключения (api.md §5).
+      if (e instanceof Error && e.message === 'REQUEST_TIMEOUT') return lose(s, ABNORMAL_CLOSE)
       await hud.fade(false) // сервер отказал: состояние не менялось, возвращаем игрока
       if (!alive()) return
       becomeReady(s)
@@ -464,31 +518,11 @@ export async function startGame(host: HTMLElement): Promise<void> {
     if (!alive()) return
 
     // Сначала полностью освобождаем старый зал, только потом новые загрузки (api.md, «Учёт бюджета»).
-    if (s.built) {
-      scene.remove(s.built.group)
-      s.built.dispose()
-      s.built = null
-      s.moveWorld = null
-    }
-    manager.unload()
-    s.exhibits = []
-    s.guides = []
-    s.doors = []
+    unloadRoom(s, scene, manager)
     // Переход отменил незавершённый вопрос на сервере (api.md §7): точное состояние даст история.
     asks.reset()
-
     const { self, current_room } = entered
-    s.roomId = current_room.room_id
-    s.epoch = self.movement_epoch
-    s.seq = 0
-    s.lastMoveSentAt = null
-    s.history = new MoveHistory()
-    s.pos = { x: self.position.x, z: self.position.z }
-    s.path.reset(s.pos)
-    s.pathBehind = false
-    controls.yaw = self.rotation.yaw
-    controls.pitch = self.rotation.pitch
-    s.players.setSelf(self)
+    applySelf(s, self, controls)
 
     const slow = setTimeout(() => hud.fadeText(`Переход: ${door.label}…`), FADE_TEXT_DELAY_MS)
     try {
@@ -499,9 +533,9 @@ export async function startGame(host: HTMLElement): Promise<void> {
       if (!alive()) return
     } catch (e) {
       if (!alive()) return
-      // Серверная позиция уже в новом зале: повтор через переподключение возьмёт её из snapshot.
-      teardown(s)
-      hud.showLoading({ kind: 'error', message: `Не удалось загрузить зал: ${userErrorText(e)}`, onRetry: () => void connect() })
+      // Серверная позиция уже в новом зале: переподключение возьмёт её из snapshot.
+      hud.showMessage(`Не удалось загрузить зал: ${userErrorText(e)}`)
+      lose(s, ABNORMAL_CLOSE)
       return
     } finally {
       clearTimeout(slow)
@@ -534,49 +568,40 @@ export async function startGame(host: HTMLElement): Promise<void> {
     })
   }
 
-  /** `returning` — вход по живой сессии (перезагрузка страницы): игрок возвращается на своё место. */
-  async function connect(returning = false): Promise<void> {
-    teardown(session)
-    const s: Session = {
-      ac: new AbortController(),
-      socket: null,
-      manifest: null,
-      budget: null,
-      budgetOff: null,
-      built: null,
-      moveWorld: null,
-      exhibits: [],
-      guides: [],
-      doors: [],
-      pos: { x: 0, z: 0 },
-      epoch: 0,
-      seq: 0,
-      ready: false,
-      moveTimer: null,
-      lastMoveSentAt: null,
-      selfId: '',
-      history: new MoveHistory(),
-      path: new MovePath(),
-      pathBehind: false,
-      players: new PlayerRegistry(''),
-      roomId: null,
-      photo: null,
-      photoBusy: false,
-    }
-    session = s
-    hud.showLoading({ kind: 'loading', text: returning ? 'Возвращаемся на место…' : 'Загрузка зала…' })
+  /**
+   * Одна попытка входа в мир (api.md §4): сокет и snapshot, затем manifest, сверка версии, освобождение
+   * прежнего мира, загрузка current_room и world.ready. Прежний зал остаётся на экране до нового snapshot.
+   */
+  async function connectOnce(isCurrent: () => boolean): Promise<ConnectResult> {
+    const old = session
+    if (!old) hud.showLoading({ kind: 'loading', text: returningEntry ? 'Возвращаемся на место…' : 'Загрузка зала…' })
     hud.showLogout(() => void onLogout())
+
+    let opened
     try {
-      const { socket, snapshot } = await GameSocket.open()
-      if (session !== s || s.ac.signal.aborted) {
-        socket.close()
-        return
-      }
-      s.socket = socket
+      opened = await GameSocket.open()
+    } catch (e) {
+      const m = e instanceof Error ? /^SOCKET_CLOSED:(\d+)$/.exec(e.message) : null
+      return { ok: false, code: m ? Number(m[1]) : null, error: e }
+    }
+    const { socket, snapshot } = opened
+    if (!isCurrent()) {
+      socket.close()
+      return { ok: false, code: null, error: new Error('CANCELLED') }
+    }
+
+    if (old) {
+      teardown(old, true)
+      await hud.fade(true)
+      hud.fadeText('Загрузка зала…')
+    }
+    const s = newSession()
+    session = s
+    s.socket = socket
+    let closedCode: number | null = null
+    try {
       s.selfId = snapshot.self.user_id
-      s.roomId = snapshot.current_room.room_id
       s.players = new PlayerRegistry(s.selfId)
-      s.players.setSelf(snapshot.self)
       const t0 = performance.now()
       snapshot.players.forEach((p) => s.players.upsert(p, t0))
       socket.on('player.joined', ({ player }) => s.players.upsert(player, performance.now()))
@@ -610,10 +635,9 @@ export async function startGame(host: HTMLElement): Promise<void> {
         askFailed(env.request_id, askErrorText(body))
       })
       socket.onClose((code) => {
-        if (session !== s || s.ac.signal.aborted) return
-        if (code === CloseCode.SessionExpired) return showLogin()
-        teardown(s)
-        hud.showLoading({ kind: 'error', message: 'Связь потеряна', onRetry: () => void connect() })
+        closedCode = code
+        if (session !== s || s.ac.signal.aborted || s.lost) return
+        if (s.joined) lose(s, code) // до готовности неудачу вернёт сама попытка
       })
 
       const manifest = await fetchManifest(s.ac.signal)
@@ -626,34 +650,22 @@ export async function startGame(host: HTMLElement): Promise<void> {
 
       rooms = makeRooms(snapshot.world_version, s.budget)
       const loaded = await rooms.load(snapshot.current_room, s.ac.signal)
-      if (s.ac.signal.aborted) return
       showRoom(s, loaded)
-      if (returning) hud.showLoading({ kind: 'loading', text: `Возвращаемся в зал «${loaded.room.title}»…` })
-
-      const self = snapshot.self
-      s.pos = { x: self.position.x, z: self.position.z }
-      s.path.reset(s.pos)
-      s.epoch = self.movement_epoch
-      controls.yaw = self.rotation.yaw
-      controls.pitch = self.rotation.pitch
+      if (!old && returningEntry) hud.showLoading({ kind: 'loading', text: `Возвращаемся в зал «${loaded.room.title}»…` })
+      applySelf(s, snapshot.self, controls)
 
       await socket.request('world.ready', { world_version: snapshot.world_version, movement_epoch: s.epoch }, 'world.ready')
-      if (s.ac.signal.aborted) return
-
-      hud.showLoading(null)
-      becomeReady(s)
+      if (!isCurrent() || session !== s) throw new Error('CANCELLED')
     } catch (e) {
-      if (s.ac.signal.aborted || session !== s) return
-      teardown(s)
-      // Отказ upgrade браузер видит как закрытие до snapshot: проверяем сессию (api.md §4).
-      if (e instanceof Error && e.message.startsWith('SOCKET_CLOSED')) {
-        const me = await fetchMe().catch(() => undefined)
-        // За время проверки пользователь мог выйти или зайти заново: тогда экран уже не наш.
-        if (session !== null || loginScreen.visible) return
-        if (me === null) return showLogin()
-      }
-      hud.showLoading({ kind: 'error', message: `Не удалось загрузить зал: ${userErrorText(e)}`, onRetry: () => void connect() })
+      if (session === s) teardown(s, true)
+      else s.socket?.close()
+      return { ok: false, code: closedCode, error: e }
     }
+    hud.fadeText(null)
+    await hud.fade(false)
+    hud.showLoading(null)
+    becomeReady(s)
+    return { ok: true }
   }
 
   renderer.domElement.addEventListener('click', () => {
@@ -749,8 +761,19 @@ export async function startGame(host: HTMLElement): Promise<void> {
     hand.render(renderer)
   })
 
-  // Штатное закрытие: сервер сохраняет последнюю позицию (api.md §2).
-  window.addEventListener('pagehide', () => session?.socket?.close())
+  window.addEventListener('pagehide', () => {
+    // Штатное закрытие: сервер сохраняет последнюю позицию (api.md §2). Политика повторов не запускается.
+    const s = session
+    if (!s) return
+    s.lost = true
+    if (s.moveTimer) clearInterval(s.moveTimer)
+    s.ready = false
+    s.socket?.close()
+  })
+  // Возврат из кеша страницы (кнопка «Назад»): сокет был закрыт при уходе — подключаемся сразу.
+  window.addEventListener('pageshow', (e) => {
+    if (e.persisted && session?.lost) loop.retryNow()
+  })
 
   await enterWorld()
 }
