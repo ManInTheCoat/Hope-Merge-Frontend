@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { ApiError, ContentError, fetchGenerations, fetchMe, readLimited } from '../src/network/api'
+import { ApiError, ContentError, fetchGenerations, fetchMe, readLimited, uploadPhoto } from '../src/network/api'
 
 function streamResponse(chunks: number[], headers: Record<string, string> = {}) {
   let pulled = 0
@@ -69,6 +69,33 @@ test('fetchGenerations запрашивает 20 записей и переда�
     const err = await fetchGenerations('guide_1', null).catch((e) => e)
     expect(err).toBeInstanceOf(ApiError)
     expect(err.status).toBe(404)
+  } finally {
+    globalThis.fetch = orig
+  }
+})
+
+test('uploadPhoto: POST /photos с Idempotency-Key и тем же FormData; 409 — ApiError', async () => {
+  const orig = globalThis.fetch
+  const seen: { url: string; init: RequestInit }[] = []
+  let status = 201
+  globalThis.fetch = (async (url: string, init: RequestInit) => {
+    seen.push({ url: String(url), init })
+    return status === 201
+      ? new Response(JSON.stringify({ id: 'p1' }), { status })
+      : new Response(JSON.stringify({ error: { code: 'IDEMPOTENCY_CONFLICT', message: 'm', request_id: 'r' } }), { status })
+  }) as unknown as typeof fetch
+  try {
+    const form = new FormData()
+    form.append('room_id', 'r1')
+    expect((await uploadPhoto(form, 'k1')).id).toBe('p1')
+    expect(seen[0].url.endsWith('/api/v1/photos')).toBe(true)
+    expect(seen[0].init.method).toBe('POST')
+    expect(new Headers(seen[0].init.headers).get('Idempotency-Key')).toBe('k1')
+    expect(seen[0].init.body).toBe(form)
+    status = 409
+    const err = await uploadPhoto(form, 'k1').catch((e) => e)
+    expect(err).toBeInstanceOf(ApiError)
+    expect(err.code).toBe('IDEMPOTENCY_CONFLICT')
   } finally {
     globalThis.fetch = orig
   }

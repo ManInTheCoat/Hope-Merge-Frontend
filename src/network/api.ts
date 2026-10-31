@@ -5,6 +5,7 @@ import {
   type HttpErrorBody,
   type Manifest,
   type MeResponse,
+  type Photo,
   type User,
 } from './contract'
 
@@ -129,4 +130,10 @@ export async function fetchMe(): Promise<MeResponse | null> {
     if (e instanceof ApiError && e.status === 401) return null
     throw e
   }
+}
+
+/** `POST /photos` (api.md, «Фото»). Content-Type с границей multipart выставляет браузер. */
+export async function uploadPhoto(form: FormData, key: string, signal?: AbortSignal): Promise<Photo> {
+  const res = await apiFetch('/photos', { method: 'POST', headers: { 'Idempotency-Key': key }, body: form, signal })
+  return res.json()
 }

@@ -128,8 +128,9 @@ export class GameSocket {
     })
   }
 
+  /** Штатное закрытие (1000): сервер сохраняет позицию при штатном отключении. */
   close(): void {
-    this.ws.close()
+    this.ws.close(1000)
   }
 
   private receive(data: string): void {

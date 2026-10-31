@@ -1,21 +1,29 @@
 import * as THREE from 'three'
-import { fetchAssetBlob, fetchGenerations, fetchManifest, fetchMe, fetchRoomText, logout } from './network/api'
+import { ContentError, fetchAssetBlob, fetchGenerations, fetchManifest, fetchMe, fetchRoomText, logout, uploadPhoto } from './network/api'
 import { CloseCode, type Door, type ErrorBody, type Exhibit, type Guide, type Manifest } from './network/contract'
+import { uuidV4 } from './network/uuid'
 import { GameSocket } from './network/ws'
+import { canvasEncoder, copyFrame, encodeUnderLimit, fitFrame } from './photo/frame'
+import { photoKeyAction } from './photo/keys'
+import { downloadBlob, LastPhoto } from './photo/lastPhoto'
+import { photoErrorText, savePhoto, type Shot } from './photo/save'
 import { PlayerRegistry } from './players/registry'
 import { RemotePlayersView } from './players/view'
 import { moveCylinder, type Vec2 } from './scene/collision'
 import { FirstPersonControls, typingInField } from './scene/controls'
 import { CLIENT_SPEED_FACTOR, moveVector, shouldSendMove } from './scene/input'
+import { HandCamera } from './scene/handCamera'
 import { buildRoom, type BuiltRoom } from './scene/roomBuilder'
 import { pickDoor, pickTarget, type Target } from './scene/targeting'
 import { createChat } from './ui/chat'
+import { createControlsBar } from './ui/controlsBar'
 import { chatKeyAction, chatLineText } from './ui/chatLog'
 import { askErrorText, GuideAsks } from './ui/guideAsks'
 import { panelKeyAction } from './ui/guideKeys'
 import { createGuidePanel } from './ui/guidePanel'
 import { createHud } from './ui/hud'
 import { createLoginScreen } from './ui/login'
+import { createPhotoCard } from './ui/photoCard'
 import { AssetBudget } from './world/AssetBudget'
 import { MoveHistory } from './world/moveHistory'
 import { RoomManager, type LoadedRoom } from './world/RoomManager'
@@ -53,6 +61,10 @@ type Session = {
   history: MoveHistory
   players: PlayerRegistry
   roomId: string | null
+  /** Последний снимок; создаётся вместе с бюджетом подключения. */
+  photo: LastPhoto | null
+  /** Идут съёмка или загрузка фото: движение и переходы заблокированы. */
+  photoBusy: boolean
 }
 
 function chatErrorText(e: unknown): string {
@@ -80,6 +92,9 @@ export async function startGame(host: HTMLElement): Promise<void> {
   camera.rotation.order = 'YXZ'
 
   const hud = createHud(host)
+  const hand = new HandCamera()
+  /** Сглаженная доля скорости ходьбы для покачивания фотоаппарата. */
+  let walkBlend = 0
   // Версия мира и лимит кеша известны только после snapshot и манифеста, поэтому менеджер — на каждое подключение.
   const makeRooms = (version: string, budget: AssetBudget) =>
     new RoomManager({
@@ -183,6 +198,87 @@ export async function startGame(host: HTMLElement): Promise<void> {
 
   const loginScreen = createLoginScreen(host, () => void connect())
 
+  const controlsBar = createControlsBar(host)
+  /** Снимок, который показывает карточка: «Повторить» отправляет его же с тем же ключом. */
+  let lastShot: Shot | null = null
+  const photoCard = createPhotoCard(host, {
+    onRetry: () => {
+      const s = session
+      if (s && lastShot && !s.photoBusy) void uploadShot(s, lastShot)
+    },
+    onDownload: () => downloadPhoto(),
+  })
+
+  function canShoot(s: Session | null): s is Session {
+    return !!s?.ready && !!s.photo && controls.locked && !cardFor && !chat.isOpen && !guidePanel.isOpen && !s.photoBusy
+  }
+
+  function downloadPhoto() {
+    const photo = session?.photo
+    if (photo?.url && photo.fileName) downloadBlob(photo.url, photo.fileName)
+  }
+
+  async function takePhoto(s: Session) {
+    const photo = s.photo!
+    const roomId = s.roomId!
+    s.photoBusy = true
+    controls.keys.clear()
+    // Прежний оригинал освобождается до новой съёмки: карточка с его ссылкой больше не нужна.
+    lastShot = null
+    photoCard.hide()
+    try {
+      photo.begin()
+    } catch (e) {
+      s.photoBusy = false
+      hud.showMessage(e instanceof ContentError ? 'Нет места в кеше для фото' : errorMessage(e))
+      return
+    }
+    const takenAt = new Date()
+    // Кадр копируем сразу после отрисовки, в том же синхронном участке: буфер WebGL ещё не очищен.
+    renderer.render(scene, camera)
+    const frame = copyFrame(renderer.domElement)
+    hud.flash()
+    hand.shoot(performance.now())
+    const exhibitId = target?.kind === 'exhibit' ? target.exhibit.id : null
+    let blob: Blob
+    try {
+      const size = fitFrame(frame.width, frame.height)
+      blob = await encodeUnderLimit(canvasEncoder(frame), size.width, size.height)
+    } catch (e) {
+      photo.release()
+      if (session === s) s.photoBusy = false
+      hud.showMessage(`Не удалось снять кадр: ${errorMessage(e)}`)
+      return
+    }
+    if (session !== s) return // сессия разобрана, бюджет и оригинал уже освобождены
+    photo.commit(blob, roomId, takenAt)
+    const shot: Shot = { key: uuidV4(), blob, roomId, epoch: s.epoch, exhibitId, takenAt }
+    lastShot = shot
+    await uploadShot(s, shot)
+  }
+
+  /** Загрузка снимка с блокировкой движения и переходов до ответа сервера. */
+  async function uploadShot(s: Session, shot: Shot) {
+    const url = s.photo?.url
+    if (!url) return
+    if (!s.ready || !s.socket?.isOpen) {
+      photoCard.show(url, { kind: 'error', text: 'Нет связи с сервером' })
+      return
+    }
+    s.photoBusy = true
+    controls.keys.clear()
+    photoCard.show(url, { kind: 'uploading' })
+    try {
+      await savePhoto(shot, uploadPhoto, { signal: s.ac.signal })
+      if (session === s && lastShot === shot) photoCard.show(url, { kind: 'saved' })
+    } catch (e) {
+      if (session !== s || s.ac.signal.aborted) return // выход или обрыв: об этом уже сообщает экран
+      if (lastShot === shot) photoCard.show(url, { kind: 'error', text: photoErrorText(e) })
+    } finally {
+      if (session === s) s.photoBusy = false
+    }
+  }
+
   function showLogin() {
     teardown(session)
     hud.showLoading(null)
@@ -208,12 +304,23 @@ export async function startGame(host: HTMLElement): Promise<void> {
     } catch {
       return hud.showLoading({ kind: 'error', message: 'Сервер недоступен', onRetry: () => void enterWorld() })
     }
-    if (me) await connect()
+    if (me) await connect(true)
     else showLogin()
   }
 
   document.addEventListener('keydown', (e) => {
     if (e.repeat) return
+    const photoAction = photoKeyAction(e.code, {
+      typing: typingInField(),
+      canShoot: canShoot(session),
+      hasPhoto: !!session?.photo?.blob,
+    })
+    if (photoAction) {
+      e.preventDefault()
+      if (photoAction === 'download') return downloadPhoto()
+      if (canShoot(session)) void takePhoto(session)
+      return
+    }
     // Фокус вне панели (клик мимо поля): E всё равно закрывает диалог.
     // Нажатие E, открывшее панель, погашено в controls (defaultPrevented) и её не закрывает.
     if (guidePanel.isOpen) {
@@ -251,6 +358,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
   function resize() {
     renderer.setSize(window.innerWidth, window.innerHeight)
     camera.aspect = window.innerWidth / window.innerHeight
+    hand.setAspect(camera.aspect)
     camera.updateProjectionMatrix()
   }
   window.addEventListener('resize', resize)
@@ -274,6 +382,11 @@ export async function startGame(host: HTMLElement): Promise<void> {
     hud.fadeText(null)
     if (s.moveTimer) clearInterval(s.moveTimer)
     s.socket?.close()
+    s.photo?.release()
+    s.photoBusy = false
+    lastShot = null
+    photoCard.hide()
+    controlsBar.setVisible(false)
     if (controls.locked) document.exitPointerLock() // иначе клик по кнопке «Повторить» уходит в захваченный canvas
     if (s.built) {
       scene.remove(s.built.group)
@@ -412,7 +525,8 @@ export async function startGame(host: HTMLElement): Promise<void> {
     })
   }
 
-  async function connect(): Promise<void> {
+  /** `returning` — вход по живой сессии (перезагрузка страницы): игрок возвращается на своё место. */
+  async function connect(returning = false): Promise<void> {
     teardown(session)
     const s: Session = {
       ac: new AbortController(),
@@ -434,9 +548,11 @@ export async function startGame(host: HTMLElement): Promise<void> {
       history: new MoveHistory(),
       players: new PlayerRegistry(''),
       roomId: null,
+      photo: null,
+      photoBusy: false,
     }
     session = s
-    hud.showLoading({ kind: 'loading', text: 'Загрузка зала…' })
+    hud.showLoading({ kind: 'loading', text: returning ? 'Возвращаемся на место…' : 'Загрузка зала…' })
     hud.showLogout(() => void onLogout())
     try {
       const { socket, snapshot } = await GameSocket.open()
@@ -488,6 +604,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
       if (manifest.world_version !== snapshot.world_version) throw new Error('Версия мира не совпадает, обновите страницу')
       s.manifest = manifest
       s.budget = new AssetBudget(manifest.client_cache_limit_bytes)
+      s.photo = new LastPhoto(s.budget)
       hud.showCache({ used: 0, limit: s.budget.limit })
       s.budgetOff = s.budget.onChange((used, limit) => hud.showCache({ used, limit }))
 
@@ -495,6 +612,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
       const loaded = await rooms.load(snapshot.current_room, s.ac.signal)
       if (s.ac.signal.aborted) return
       showRoom(s, loaded)
+      if (returning) hud.showLoading({ kind: 'loading', text: `Возвращаемся в зал «${loaded.room.title}»…` })
 
       const self = snapshot.self
       s.pos = { x: self.position.x, z: self.position.z }
@@ -526,6 +644,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
   })
 
   controls.onInteract = async () => {
+    if (session?.photoBusy) return // до ответа на фото ни осмотра, ни переходов
     if (cardFor) return closeCard()
     const s = session
     if (!s?.ready || !s.socket || !controls.locked) return
@@ -565,12 +684,16 @@ export async function startGame(host: HTMLElement): Promise<void> {
     // новый зал должен быть виден уже с точки появления, а не со старой позиции у двери.
     if (s?.manifest && s.built) {
       const m = s.manifest.movement
-      if (s.ready && controls.locked && !cardFor) {
+      let walked = 0
+      if (s.ready && controls.locked && !cardFor && !s.photoBusy) {
         const delta = moveVector(controls.keys.state, controls.yaw, m.max_speed_mps * CLIENT_SPEED_FACTOR, dt)
         if (delta.x !== 0 || delta.z !== 0) {
+          const before = s.pos
           s.pos = moveCylinder(s.pos, delta, { colliders: s.built.colliders, bounds: s.built.bounds }, m.player_radius_m, m.player_height_m)
+          if (dt > 0) walked = Math.hypot(s.pos.x - before.x, s.pos.z - before.z) / dt / m.max_speed_mps
         }
       }
+      walkBlend += (Math.min(walked, 1) - walkBlend) * Math.min(1, dt * 8)
       camera.position.set(s.pos.x, m.camera_height_m, s.pos.z)
       camera.rotation.set(controls.pitch, controls.yaw, 0, 'YXZ')
 
@@ -593,8 +716,15 @@ export async function startGame(host: HTMLElement): Promise<void> {
       }
       if (s.roomId) view.update(s.players, s.roomId, now, camera)
     }
+    controlsBar.setVisible(!!s?.ready && controls.locked && !chat.isOpen && !guidePanel.isOpen)
     renderer.render(scene, camera)
+    hand.visible = !!s?.built
+    hand.update(now, walkBlend)
+    hand.render(renderer)
   })
+
+  // Штатное закрытие: сервер сохраняет последнюю позицию (api.md §2).
+  window.addEventListener('pagehide', () => session?.socket?.close())
 
   await enterWorld()
 }
