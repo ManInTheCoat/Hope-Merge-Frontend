@@ -34,3 +34,19 @@ export class ChatLog {
     this.list = []
   }
 }
+
+export type ChatKeyContext = {
+  chatOpen: boolean
+  /** Фокус в поле ввода: его клавиши обрабатывает само поле. */
+  typing: boolean
+  /** Чат сейчас открывать нельзя: экран входа, карточка экспоната, нет связи. */
+  blocked: boolean
+}
+
+/** Что делает клавиша на уровне документа: открыть чат, закрыть его или ничего. */
+export function chatKeyAction(code: string, ctx: ChatKeyContext): 'open' | 'close' | null {
+  // Esc ловим и вне поля: фокус мог уйти кликом мимо, а чат при этом остаётся открытым.
+  if (code === 'Escape') return ctx.chatOpen ? 'close' : null
+  if (code !== 'Enter' && code !== 'NumpadEnter') return null
+  return ctx.chatOpen || ctx.typing || ctx.blocked ? null : 'open'
+}

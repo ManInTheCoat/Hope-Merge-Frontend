@@ -10,7 +10,7 @@ import { CLIENT_SPEED_FACTOR, moveVector, shouldSendMove } from './scene/input'
 import { buildRoom, type BuiltRoom } from './scene/roomBuilder'
 import { pickExhibit } from './scene/targeting'
 import { createChat } from './ui/chat'
-import { chatLineText } from './ui/chatLog'
+import { chatKeyAction, chatLineText } from './ui/chatLog'
 import { createHud } from './ui/hud'
 import { createLoginScreen } from './ui/login'
 import { MoveHistory } from './world/moveHistory'
@@ -97,14 +97,16 @@ export async function startGame(host: HTMLElement): Promise<void> {
         throw new Error(chatErrorText(e))
       }
     },
-    onClose(sent) {
-      const ready = !!session?.ready
-      controls.enabled = ready
-      // Оверлей нужен на случай, если захват не удастся; при успехе pointerlockchange его скроет.
-      hud.showClickOverlay(ready && !controls.locked, () => controls.lock())
-      if (sent && ready) controls.lock()
-    },
+    onClose: (sent) => afterChatClosed(sent),
   })
+
+  function afterChatClosed(sent: boolean) {
+    const ready = !!session?.ready
+    controls.enabled = ready
+    // Оверлей нужен на случай, если захват не удастся; при успехе pointerlockchange его скроет.
+    hud.showClickOverlay(ready && !controls.locked, () => controls.lock())
+    if (sent && ready) controls.lock()
+  }
 
   const loginScreen = createLoginScreen(host, () => void connect())
 
@@ -138,9 +140,19 @@ export async function startGame(host: HTMLElement): Promise<void> {
   }
 
   document.addEventListener('keydown', (e) => {
-    if ((e.code !== 'Enter' && e.code !== 'NumpadEnter') || e.repeat || typingInField()) return
-    if (loginScreen.visible || chat.isOpen || cardFor || !session?.socket?.isOpen) return
+    if (e.repeat) return
+    const action = chatKeyAction(e.code, {
+      chatOpen: chat.isOpen,
+      typing: typingInField(),
+      blocked: loginScreen.visible || !!cardFor || !session?.socket?.isOpen,
+    })
+    if (!action) return
     e.preventDefault()
+    if (action === 'close') {
+      chat.close()
+      afterChatClosed(false)
+      return
+    }
     chat.open()
     controls.enabled = false
     controls.keys.clear()
