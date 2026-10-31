@@ -4,7 +4,7 @@ import { type Door, type ErrorBody, type Exhibit, type Guide } from './network/c
 import { closeAction, ReconnectLoop, type ConnectResult, type LinkState } from './network/reconnect'
 import { uuidV4 } from './network/uuid'
 import { GameSocket } from './network/ws'
-import { canvasEncoder, copyFrame, encodeUnderLimit, fitFrame } from './photo/frame'
+import { canvasEncoder, copyFrame, encodeUnderLimit } from './photo/frame'
 import { photoKeyAction } from './photo/keys'
 import { downloadBlob, LastPhoto } from './photo/lastPhoto'
 import { photoErrorText, savePhoto, type Shot } from './photo/save'
@@ -22,7 +22,7 @@ import { chatKeyAction, chatLineText } from './ui/chatLog'
 import { askErrorText, GuideAsks } from './ui/guideAsks'
 import { panelKeyAction } from './ui/guideKeys'
 import { createGuidePanel } from './ui/guidePanel'
-import { userErrorText } from './ui/errorText'
+import { NO_CONNECTION, userErrorText } from './ui/errorText'
 import { createHud } from './ui/hud'
 import { linkView } from './ui/linkView'
 import { createLoginScreen } from './ui/login'
@@ -174,13 +174,19 @@ export async function startGame(host: HTMLElement): Promise<void> {
   const photoCard = createPhotoCard(host, {
     onRetry: () => {
       const s = session
-      if (s && lastShot && !s.photoBusy) void uploadShot(s, lastShot)
+      // Во время перехода, переподключения или другой загрузки повтор недоступен.
+      if (s && lastShot && !actionsLocked(s)) void uploadShot(s, lastShot)
     },
     onDownload: () => downloadPhoto(),
   })
 
+  /** Игровые действия (движение, E, F, повтор фото) заблокированы: нет готовности, связь потеряна или идёт фото. */
+  function actionsLocked(s: Session | null): boolean {
+    return !s || !s.ready || s.lost || s.photoBusy
+  }
+
   function canShoot(s: Session | null): s is Session {
-    return !!s?.ready && !!s.photo && controls.locked && !cardFor && !chat.isOpen && !guidePanel.isOpen && !s.photoBusy
+    return !actionsLocked(s) && !!s!.photo && controls.locked && !cardFor && !chat.isOpen && !guidePanel.isOpen
   }
 
   function downloadPhoto() {
@@ -212,8 +218,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
     const exhibitId = target?.kind === 'exhibit' ? target.exhibit.id : null
     let blob: Blob
     try {
-      const size = fitFrame(frame.width, frame.height)
-      blob = await encodeUnderLimit(canvasEncoder(frame), size.width, size.height)
+      blob = await encodeUnderLimit(canvasEncoder(frame), frame.width, frame.height) // copyFrame уже вписал кадр
     } catch (e) {
       photo.release()
       if (session === s) s.photoBusy = false
@@ -224,26 +229,38 @@ export async function startGame(host: HTMLElement): Promise<void> {
     photo.commit(blob, roomId, takenAt)
     const shot: Shot = { key: uuidV4(), blob, roomId, epoch: s.epoch, exhibitId, takenAt }
     lastShot = shot
+    // Сервер проверяет расстояние до экспоната по своей позиции: она должна быть свежей, как перед осмотром.
+    if (exhibitId) sendMove(s, true)
     await uploadShot(s, shot)
   }
 
   /** Загрузка снимка с блокировкой движения и переходов до ответа сервера. */
   async function uploadShot(s: Session, shot: Shot) {
-    const url = s.photo?.url
-    if (!url) return
-    if (!s.ready || !s.socket?.isOpen) {
-      photoCard.show(url, { kind: 'error', text: 'Нет связи с сервером' })
-      return
-    }
-    s.photoBusy = true
-    controls.keys.clear()
-    photoCard.show(url, { kind: 'uploading' })
+    let current = shot
     try {
-      await savePhoto(shot, uploadPhoto, { signal: s.ac.signal })
-      if (session === s && lastShot === shot) photoCard.show(url, { kind: 'saved' })
-    } catch (e) {
-      if (session !== s || s.ac.signal.aborted) return // выход или обрыв: об этом уже сообщает экран
-      if (lastShot === shot) photoCard.show(url, { kind: 'error', text: photoErrorText(e) })
+      const url = s.photo?.url
+      if (!url) return
+      if (!s.ready || s.lost || !s.socket?.isOpen) {
+        photoCard.show(url, { kind: 'error', text: NO_CONNECTION })
+        return
+      }
+      s.photoBusy = true
+      controls.keys.clear()
+      photoCard.show(url, { kind: 'uploading' })
+      try {
+        await savePhoto(shot, uploadPhoto, {
+          signal: s.ac.signal,
+          // Экспонат не принят: ручной повтор должен идти уже без него и с новым ключом.
+          onFallback: (next) => {
+            if (lastShot === current) lastShot = next
+            current = next
+          },
+        })
+        if (session === s && lastShot === current) photoCard.show(url, { kind: 'saved' })
+      } catch (e) {
+        if (session !== s || s.ac.signal.aborted) return // выход или обрыв: об этом уже сообщает экран
+        if (lastShot === current) photoCard.show(url, { kind: 'error', text: photoErrorText(e) })
+      }
     } finally {
       if (session === s) s.photoBusy = false
     }
@@ -360,15 +377,16 @@ export async function startGame(host: HTMLElement): Promise<void> {
 
   document.addEventListener('keydown', (e) => {
     if (e.repeat) return
+    const shooter = canShoot(session) ? session : null
     const photoAction = photoKeyAction(e.code, {
       typing: typingInField(),
-      canShoot: canShoot(session),
+      canShoot: shooter !== null,
       hasPhoto: !!session?.photo?.blob,
     })
     if (photoAction) {
       e.preventDefault()
       if (photoAction === 'download') return downloadPhoto()
-      if (canShoot(session)) void takePhoto(session)
+      if (shooter) void takePhoto(shooter)
       return
     }
     // Фокус вне панели (клик мимо поля): E всё равно закрывает диалог.
@@ -523,6 +541,9 @@ export async function startGame(host: HTMLElement): Promise<void> {
     asks.reset()
     const { self, current_room } = entered
     applySelf(s, self, controls)
+    // Снимок привязан к залу и epoch: повторить его загрузку из нового зала нельзя.
+    lastShot = null
+    photoCard.hide()
 
     const slow = setTimeout(() => hud.fadeText(`Переход: ${door.label}…`), FADE_TEXT_DELAY_MS)
     try {
@@ -715,7 +736,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
     if (s?.manifest && s.built) {
       const m = s.manifest.movement
       let walked = 0
-      if (s.ready && controls.locked && !cardFor && !s.photoBusy) {
+      if (!actionsLocked(s) && controls.locked && !cardFor) {
         const delta = moveVector(controls.keys.state, controls.yaw, m.max_speed_mps * CLIENT_SPEED_FACTOR, dt)
         if (delta.x !== 0 || delta.z !== 0) {
           const before = s.pos

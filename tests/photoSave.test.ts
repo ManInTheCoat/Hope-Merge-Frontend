@@ -33,13 +33,13 @@ function scripted(replies: (Photo | Error)[]): { upload: Upload; calls: Call[] }
 
 test('успех с первой попытки', async () => {
   const { upload, calls } = scripted([photo])
-  expect(await savePhoto(shot(), upload, fast)).toBe(photo)
+  expect((await savePhoto(shot(), upload, fast)).photo).toBe(photo)
   expect(calls.length).toBe(1)
 })
 
 test('сетевой сбой → повтор с тем же ключом, ответ 200 при повторе — успех', async () => {
   const { upload, calls } = scripted([net(), net(), photo])
-  expect(await savePhoto(shot(), upload, fast)).toBe(photo)
+  expect((await savePhoto(shot(), upload, fast)).photo).toBe(photo)
   expect(calls.map((c) => c.key)).toEqual(['k1', 'k1', 'k1'])
   expect(calls[2].form.get('room_id')).toBe('r1')
 })
@@ -62,13 +62,19 @@ test('ответ с кодом ошибки не повторяется', async 
 test('OUT_OF_RANGE с exhibit_id → один повтор без экспоната и с новым ключом', async () => {
   const s = shot({ exhibitId: 'ex1' })
   const { upload, calls } = scripted([api(403, 'OUT_OF_RANGE'), photo])
-  expect(await savePhoto(s, upload, fast)).toBe(photo)
+  const fallbacks: Shot[] = []
+  const res = await savePhoto(s, upload, { ...fast, onFallback: (x) => fallbacks.push(x) })
+  expect(res.photo).toBe(photo)
   expect(calls.length).toBe(2)
   expect(calls[0].form.get('exhibit_id')).toBe('ex1')
   expect(calls[1].form.has('exhibit_id')).toBe(false)
   expect(calls[1].key).not.toBe('k1')
-  expect(s.key).toBe(calls[1].key)
-  expect(s.exhibitId).toBeNull()
+  // Переданный снимок не меняется: отправленный возвращается и сообщается отдельно.
+  expect(s.key).toBe('k1')
+  expect(s.exhibitId).toBe('ex1')
+  expect(res.shot.key).toBe(calls[1].key)
+  expect(res.shot.exhibitId).toBeNull()
+  expect(fallbacks).toEqual([res.shot])
 })
 
 test('NOT_FOUND без exhibit_id не повторяется', async () => {
