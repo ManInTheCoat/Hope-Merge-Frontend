@@ -105,3 +105,10 @@ test('send после закрытия возвращает null', async () => {
   expect(socket.send('exhibit.inspect', { exhibit_id: 'e1' })).toBeNull()
   expect(socket.isOpen).toBe(false)
 })
+
+test('open отклоняется по тайм-ауту, если snapshot не пришёл', async () => {
+  const p = GameSocket.open('ws://x/ws', Ctor, 30)
+  const fake = FakeWebSocket.last
+  await expect(p).rejects.toThrow('SNAPSHOT_TIMEOUT')
+  expect(fake.readyState).toBe(3)
+})

@@ -7,6 +7,9 @@ import {
   type ServerEventType,
   type ServerEvents,
 } from './contract'
+import { uuidV4 } from './uuid'
+
+const SNAPSHOT_TIMEOUT_MS = 15_000
 
 type Handler = (payload: never, env: never) => void
 
@@ -24,18 +27,30 @@ export class GameSocket {
   static open(
     url: string = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}${WS_PATH}`,
     Ctor: typeof WebSocket = WebSocket,
+    timeoutMs: number = SNAPSHOT_TIMEOUT_MS,
   ): Promise<{ socket: GameSocket; snapshot: ServerEvents['world.snapshot'] }> {
     return new Promise((resolve, reject) => {
       const ws = new Ctor(url)
       const socket = new GameSocket(ws)
       let settled = false
+      const timer = setTimeout(() => {
+        if (settled) return
+        settled = true
+        reject(new Error('SNAPSHOT_TIMEOUT'))
+        socket.close()
+      }, timeoutMs)
 
       socket.on('world.snapshot', (snapshot) => {
+        if (settled) return
         settled = true
+        clearTimeout(timer)
         resolve({ socket, snapshot })
       })
       socket.onClose((code) => {
-        if (!settled) reject(new Error(`SOCKET_CLOSED:${code}`))
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        reject(new Error(`SOCKET_CLOSED:${code}`))
       })
 
       ws.onmessage = (ev) => socket.receive(String(ev.data))
@@ -66,7 +81,7 @@ export class GameSocket {
   /** Возвращает request_id отправленной команды; null, если сокет закрыт или команда без request_id (`player.move`). */
   send<K extends ClientEventType>(type: K, payload: ClientEvents[K]): string | null {
     if (!this.isOpen) return null
-    const request_id = type === 'player.move' ? undefined : crypto.randomUUID()
+    const request_id = type === 'player.move' ? undefined : uuidV4()
     this.ws.send(JSON.stringify({ type, ...(request_id ? { request_id } : {}), payload }))
     return request_id ?? null
   }

@@ -118,3 +118,40 @@ test('onBytes получает фактические размеры', async () 
   expect(seen).toContain('asset:a1:10:10')
   expect(seen.some((s) => s.startsWith('descriptor:hall:'))).toBe(true)
 })
+
+test('объявленный размер передаётся в загрузку как лимит', async () => {
+  const limits: string[] = []
+  const { manager } = setup({
+    fetchRoomText: async (id, _v, maxBytes) => {
+      limits.push(`room:${id}:${maxBytes}`)
+      return roomText
+    },
+    fetchAssetBlob: async (id, _v, maxBytes) => {
+      limits.push(`asset:${id}:${maxBytes}`)
+      return new Blob([new Uint8Array(id === 'a1' ? 10 : 20)])
+    },
+  })
+  await manager.load(pkg(), new AbortController().signal)
+  expect(limits).toContain(`room:hall:${pkg().descriptor_bytes}`)
+  expect(limits).toContain('asset:a1:10')
+  expect(limits).toContain('asset:a2:20')
+})
+
+test('сбой одного ассета отменяет остальные загрузки', async () => {
+  let siblingAborted = false
+  const { manager } = setup({
+    fetchAssetBlob: (id, _v, _max, signal) => {
+      if (id === 'a1') return Promise.reject(new Error('404'))
+      return new Promise((resolve) => {
+        const done = () => resolve(new Blob([new Uint8Array(20)]))
+        signal?.addEventListener('abort', () => {
+          siblingAborted = true
+          done()
+        })
+        setTimeout(done, 300)
+      })
+    },
+  })
+  await expect(manager.load(pkg(), new AbortController().signal)).rejects.toThrow('404')
+  expect(siblingAborted).toBe(true)
+})
