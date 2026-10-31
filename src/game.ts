@@ -402,6 +402,9 @@ export async function startGame(host: HTMLElement): Promise<void> {
       controlsBar.setVisible(false)
       hud.showClickOverlay(false)
       if (controls.locked) document.exitPointerLock()
+      // Обрыв посреди перехода: зал (если ещё загружен) остаётся виден под баннером, а не за затемнением.
+      hud.fadeText(null)
+      void hud.fade(false)
       s.socket?.close()
     } else teardown(s)
     loop.handleClose(code)
