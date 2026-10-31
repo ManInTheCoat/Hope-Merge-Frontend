@@ -21,6 +21,7 @@ import { chatKeyAction, chatLineText } from './ui/chatLog'
 import { askErrorText, GuideAsks } from './ui/guideAsks'
 import { panelKeyAction } from './ui/guideKeys'
 import { createGuidePanel } from './ui/guidePanel'
+import { userErrorText } from './ui/errorText'
 import { createHud } from './ui/hud'
 import { createLoginScreen } from './ui/login'
 import { createPhotoCard } from './ui/photoCard'
@@ -65,19 +66,6 @@ type Session = {
   photo: LastPhoto | null
   /** Идут съёмка или загрузка фото: движение и переходы заблокированы. */
   photoBusy: boolean
-}
-
-function chatErrorText(e: unknown): string {
-  if (e instanceof Error && e.message === 'REQUEST_TIMEOUT') return 'Сервер не ответил, попробуйте ещё раз'
-  const body = e as Partial<ErrorBody> | null
-  if (body?.code === 'RATE_LIMITED') return `Слишком часто, подождите ${Math.ceil((body.retry_after_ms ?? 1000) / 1000)} с`
-  return errorMessage(e)
-}
-
-function errorMessage(e: unknown): string {
-  if (e instanceof Error) return e.message
-  const body = e as Partial<ErrorBody> | null
-  return body?.message ?? 'Что-то пошло не так'
 }
 
 export async function startGame(host: HTMLElement): Promise<void> {
@@ -129,7 +117,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
       try {
         await socket.request('chat.send', { text }, 'chat.message', CHAT_SEND_TIMEOUT_MS)
       } catch (e) {
-        throw new Error(chatErrorText(e))
+        throw new Error(userErrorText(e))
       }
     },
     onClose: (sent) => resumeControls(sent),
@@ -159,7 +147,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
       try {
         await socket.request('guide.cancel', { generation_id: generationId }, 'guide.cancelled', GUIDE_CANCEL_TIMEOUT_MS)
       } catch (e) {
-        throw new Error(e instanceof Error ? chatErrorText(e) : askErrorText(e as Partial<ErrorBody>))
+        throw new Error(e instanceof Error ? userErrorText(e) : askErrorText(e as Partial<ErrorBody>))
       }
     },
     onClose: () => resumeControls(true),
@@ -230,7 +218,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
       photo.begin()
     } catch (e) {
       s.photoBusy = false
-      hud.showMessage(e instanceof ContentError ? 'Нет места в кеше для фото' : errorMessage(e))
+      hud.showMessage(e instanceof ContentError ? 'Нет места в кеше для фото' : userErrorText(e))
       return
     }
     const takenAt = new Date()
@@ -247,7 +235,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
     } catch (e) {
       photo.release()
       if (session === s) s.photoBusy = false
-      hud.showMessage(`Не удалось снять кадр: ${errorMessage(e)}`)
+      hud.showMessage(`Не удалось снять кадр: ${userErrorText(e)}`)
       return
     }
     if (session !== s) return // сессия разобрана, бюджет и оригинал уже освобождены
@@ -458,7 +446,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
       await hud.fade(false) // сервер отказал: состояние не менялось, возвращаем игрока
       if (!alive()) return
       becomeReady(s)
-      hud.showMessage(errorMessage(e))
+      hud.showMessage(userErrorText(e))
       return
     }
     await faded
@@ -499,7 +487,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
       if (!alive()) return
       // Серверная позиция уже в новом зале: повтор через переподключение возьмёт её из snapshot.
       teardown(s)
-      hud.showLoading({ kind: 'error', message: `Не удалось загрузить зал: ${errorMessage(e)}`, onRetry: () => void connect() })
+      hud.showLoading({ kind: 'error', message: `Не удалось загрузить зал: ${userErrorText(e)}`, onRetry: () => void connect() })
       return
     } finally {
       clearTimeout(slow)
@@ -635,7 +623,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
         if (session !== null || loginScreen.visible) return
         if (me === null) return showLogin()
       }
-      hud.showLoading({ kind: 'error', message: `Не удалось загрузить зал: ${errorMessage(e)}`, onRetry: () => void connect() })
+      hud.showLoading({ kind: 'error', message: `Не удалось загрузить зал: ${userErrorText(e)}`, onRetry: () => void connect() })
     }
   }
 
@@ -668,7 +656,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
     } catch (e) {
       if (session !== s) return // связь потеряна: об этом уже сообщает экран ошибки
       if (cardToken === token) closeCard()
-      hud.showMessage(errorMessage(e))
+      hud.showMessage(userErrorText(e))
     }
   }
 

@@ -1,17 +1,12 @@
 import type { ErrorBody, Generation } from '../network/contract'
-import { codePoints, trimWs } from './authForm'
+import { rateLimitText, retrySeconds } from './errorText'
+import { validateText } from './text'
 import { StreamText } from './guideStream'
 
 export const GUIDE_MAX_LEN = 2000
 
 /** Текст вопроса после trim в кодовых точках 1–2000, иначе null (api.md §7). */
-export function validateGuideText(raw: string): string | null {
-  const text = trimWs(raw)
-  const len = codePoints(text)
-  return len >= 1 && len <= GUIDE_MAX_LEN ? text : null
-}
-
-const seconds = (ms: number | undefined, fallbackMs: number) => Math.ceil((ms ?? fallbackMs) / 1000)
+export const validateGuideText = (raw: string): string | null => validateText(raw, GUIDE_MAX_LEN)
 
 /** Отказ сервера до `guide.accepted`: генерация не создана. */
 export function askErrorText(body: Partial<ErrorBody>): string {
@@ -21,9 +16,9 @@ export function askErrorText(body: Partial<ErrorBody>): string {
     case 'GUIDE_BUSY':
       return 'Гид ещё отвечает на прошлый вопрос'
     case 'GUIDE_QUEUE_FULL':
-      return `Гиды заняты, попробуйте через ${seconds(body.retry_after_ms, 5000)} с`
+      return `Гиды заняты, попробуйте через ${retrySeconds(body.retry_after_ms, 5000)} с`
     case 'RATE_LIMITED':
-      return `Слишком часто, подождите ${seconds(body.retry_after_ms, 1000)} с`
+      return rateLimitText(body.retry_after_ms)
   }
   return body.message ?? 'Что-то пошло не так'
 }

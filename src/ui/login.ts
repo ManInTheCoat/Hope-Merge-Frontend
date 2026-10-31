@@ -1,6 +1,7 @@
 import { login, register } from '../network/api'
 import type { User } from '../network/contract'
 import { authErrorText, validateLogin, validateRegister, type FieldErrors, type FieldName } from './authForm'
+import { trimWs } from './text'
 
 type Mode = 'login' | 'register'
 
@@ -90,9 +91,9 @@ export function createLoginScreen(root: HTMLElement, onSuccess: (user: User) => 
   form.addEventListener('submit', async (e) => {
     e.preventDefault()
     if (busy) return
-    const username = value('username').trim()
+    const username = trimWs(value('username'))
     const password = value('password')
-    const display_name = value('display_name').trim()
+    const display_name = trimWs(value('display_name'))
     const errs = mode === 'login' ? validateLogin({ username, password }) : validateRegister({ username, display_name, password })
     if (Object.keys(errs).length) return showErrors(errs)
     showErrors({})

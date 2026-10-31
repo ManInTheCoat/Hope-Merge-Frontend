@@ -1,14 +1,10 @@
-import { codePoints, trimWs } from './authForm'
+import { validateText } from './text'
 
 export const CHAT_MAX_LEN = 500
 const CHAT_KEEP = 100
 
 /** Текст после trim в кодовых точках 1–500, иначе null (api.md §6). */
-export function validateChatText(raw: string): string | null {
-  const text = trimWs(raw)
-  const len = codePoints(text)
-  return len >= 1 && len <= CHAT_MAX_LEN ? text : null
-}
+export const validateChatText = (raw: string): string | null => validateText(raw, CHAT_MAX_LEN)
 
 export type ChatLine = { author: string; color: string | null; text: string }
 

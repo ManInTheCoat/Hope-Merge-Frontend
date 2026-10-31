@@ -1,4 +1,4 @@
-import { codePoints, trimWs } from './authForm'
+import { codePoints, trimWs } from './text'
 import { CHAT_MAX_LEN, ChatLog, validateChatText, type ChatLine } from './chatLog'
 
 const FADE_AFTER_MS = 10_000

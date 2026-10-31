@@ -1,14 +1,12 @@
 import { ApiError } from '../network/api'
+import { retrySeconds } from './errorText'
+import { codePoints, trimWs } from './text'
 
 export type FieldName = 'username' | 'display_name' | 'password'
 export type FieldErrors = Partial<Record<FieldName, string>>
 
 const USERNAME_RE = /^[A-Za-z0-9_]{3,32}$/
 const FIELD_NAMES: FieldName[] = ['username', 'display_name', 'password']
-
-/** Обрезка по Unicode White_Space, как на сервере (api.md §1). */
-export const trimWs = (s: string) => s.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, '')
-export const codePoints = (s: string) => [...s].length
 
 function checkUsername(username: string, errors: FieldErrors) {
   if (!USERNAME_RE.test(trimWs(username))) errors.username = '3–32 символа: латиница, цифры, _'
@@ -39,7 +37,7 @@ export function authErrorText(e: unknown): { form: string; fields: FieldErrors }
     case 'INVALID_CREDENTIALS':
       return { form: 'Неверное имя или пароль', fields: {} }
     case 'RATE_LIMITED':
-      return { form: `Слишком много попыток, подождите ${Math.ceil((e.retryAfterMs ?? 1000) / 1000)} с`, fields: {} }
+      return { form: `Слишком много попыток, подождите ${retrySeconds(e.retryAfterMs)} с`, fields: {} }
     case 'VALIDATION_ERROR': {
       const fields: FieldErrors = {}
       for (const name of FIELD_NAMES) if (e.fields?.[name]) fields[name] = e.fields[name]

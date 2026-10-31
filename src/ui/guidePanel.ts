@@ -1,5 +1,5 @@
 import type { Generation, GenerationsPage, Guide } from '../network/contract'
-import { codePoints, trimWs } from './authForm'
+import { codePoints, trimWs } from './text'
 import { GUIDE_MAX_LEN, validateGuideText, type GuideAsks } from './guideAsks'
 import { panelKeyAction } from './guideKeys'
 

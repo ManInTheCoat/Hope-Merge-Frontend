@@ -1,6 +1,7 @@
 import { ApiError } from '../network/api'
 import type { Photo } from '../network/contract'
 import { uuidV4 } from '../network/uuid'
+import { rateLimitText } from '../ui/errorText'
 
 /** Снимок с полями запроса. Ключ один на снимок: повтор после потерянного ответа идёт с ним же. */
 export type Shot = { key: string; blob: Blob; roomId: string; epoch: number; exhibitId: string | null; takenAt: Date }
@@ -109,6 +110,6 @@ export async function savePhoto(shot: Shot, upload: Upload, opts: SaveOptions = 
 export function photoErrorText(e: unknown): string {
   if (e instanceof PhotoTimeoutError) return e.message
   if (!(e instanceof ApiError)) return 'Нет связи с сервером'
-  if (e.code === 'RATE_LIMITED') return `Слишком часто, подождите ${Math.ceil((e.retryAfterMs ?? 1000) / 1000)} с`
+  if (e.code === 'RATE_LIMITED') return rateLimitText(e.retryAfterMs)
   return e.message
 }
