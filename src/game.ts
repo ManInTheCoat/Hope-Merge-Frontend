@@ -9,7 +9,7 @@ import { downloadBlob, LastPhoto } from './photo/lastPhoto'
 import { photoErrorText, savePhoto, type Shot } from './photo/save'
 import { PlayerRegistry } from './players/registry'
 import { RemotePlayersView } from './players/view'
-import { moveCylinder, type Vec2 } from './scene/collision'
+import { activeColliders, moveCylinder, type MoveWorld, type Vec2 } from './scene/collision'
 import { FirstPersonControls, typingInField } from './scene/controls'
 import { CLIENT_SPEED_FACTOR, moveVector, shouldSendMove } from './scene/input'
 import { HandCamera } from './scene/handCamera'
@@ -49,6 +49,8 @@ type Session = {
   /** Отписка HUD от бюджета этой сессии. */
   budgetOff: (() => void) | null
   built: BuiltRoom | null
+  /** Коллайдеры зала на высоте игрока и границы: считаются один раз при постройке. */
+  moveWorld: MoveWorld | null
   exhibits: Exhibit[]
   guides: Guide[]
   doors: Door[]
@@ -398,6 +400,10 @@ export async function startGame(host: HTMLElement): Promise<void> {
 
   function showRoom(s: Session, loaded: LoadedRoom) {
     s.built = buildRoom(loaded.room, loaded.bitmaps)
+    s.moveWorld = {
+      colliders: activeColliders(s.built.colliders, s.manifest?.movement.player_height_m ?? 1.8),
+      bounds: s.built.bounds,
+    }
     s.exhibits = loaded.room.exhibits
     s.guides = loaded.room.guides
     s.doors = loaded.room.doors
@@ -457,6 +463,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
       scene.remove(s.built.group)
       s.built.dispose()
       s.built = null
+      s.moveWorld = null
     }
     manager.unload()
     s.exhibits = []
@@ -523,6 +530,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
       budget: null,
       budgetOff: null,
       built: null,
+      moveWorld: null,
       exhibits: [],
       guides: [],
       doors: [],
@@ -677,7 +685,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
         const delta = moveVector(controls.keys.state, controls.yaw, m.max_speed_mps * CLIENT_SPEED_FACTOR, dt)
         if (delta.x !== 0 || delta.z !== 0) {
           const before = s.pos
-          s.pos = moveCylinder(s.pos, delta, { colliders: s.built.colliders, bounds: s.built.bounds }, m.player_radius_m, m.player_height_m)
+          s.pos = moveCylinder(s.pos, delta, s.moveWorld!, m.player_radius_m)
           if (dt > 0) walked = Math.hypot(s.pos.x - before.x, s.pos.z - before.z) / dt / m.max_speed_mps
         }
       }
