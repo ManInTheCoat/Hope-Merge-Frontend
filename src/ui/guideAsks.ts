@@ -150,12 +150,13 @@ export class GuideAsks {
     this.emit()
   }
 
-  rejected(requestId: string): string | null {
+  /** Вернуть текст вопроса и гида, которому он был задан; null, если вопрос не наш или уже принят. */
+  rejected(requestId: string): { question: string; guideId: string } | null {
     const a = this.current
     if (!a || a.requestId !== requestId || a.generationId !== null) return null
     this.current = null
     this.emit()
-    return a.question
+    return { question: a.question, guideId: a.guideId }
   }
 
   setCancelling(v: boolean): void {

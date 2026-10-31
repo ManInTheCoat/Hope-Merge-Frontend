@@ -35,6 +35,9 @@ export class FirstPersonControls {
     document.addEventListener('keydown', (e) => {
       if (!this.enabled || typingInField()) return
       if (e.code === 'KeyE') {
+        // Взаимодействие может открыть окно с полем ввода: буква этого нажатия не должна туда попасть,
+        // а другие обработчики по defaultPrevented видят, что нажатие уже обработано.
+        e.preventDefault()
         if (!e.repeat) this.onInteract?.()
         return
       }

@@ -1,6 +1,7 @@
 import type { Generation, GenerationsPage, Guide } from '../network/contract'
 import { codePoints, trimWs } from './authForm'
 import { GUIDE_MAX_LEN, validateGuideText, type GuideAsks } from './guideAsks'
+import { panelKeyAction } from './guideKeys'
 
 const COUNTER_FROM = 1800
 /** Ближе этого к краю ленты считаем, что игрок у края: подгружаем историю или прокручиваем к новому. */
@@ -22,6 +23,8 @@ export type GuidePanel = {
   /** Закрыть без `onClose`: вызывающий сам решает, что делать с управлением. */
   close(): void
   readonly isOpen: boolean
+  /** Гид открытой панели или null. */
+  readonly guideId: string | null
   /** Ошибка под полем; `restore` — вернуть текст вопроса в поле. */
   showError(text: string, restore?: string): void
 }
@@ -38,6 +41,8 @@ export function createGuidePanel(root: HTMLElement, opts: GuidePanelOptions): Gu
   const { asks } = opts
   const box = el('div', 'guide-panel', root)
   box.hidden = true
+  // Пока поле заблокировано, фокус держит сама панель: иначе клавиши уйдут в игру и общий чат.
+  box.tabIndex = -1
 
   const head = el('div', 'guide-head', box)
   const titles = el('div', 'guide-titles', head)
@@ -132,9 +137,13 @@ export function createGuidePanel(root: HTMLElement, opts: GuidePanelOptions): Gu
     statusText.textContent = status?.text ?? ''
     cancelBtn.disabled = !status?.canCancel
     const busy = asks.active !== null
+    const wasBusy = input.disabled
     input.disabled = busy
     sendBtn.disabled = busy
-    if (!busy && document.activeElement === document.body) input.focus()
+    // Фокус двигаем только при смене блокировки, а не на каждом delta: клик игрока по ленте не сбиваем.
+    if (busy && !box.contains(document.activeElement)) box.focus()
+    else if (busy && document.activeElement === input) box.focus()
+    else if (!busy && wasBusy && (document.activeElement === box || document.activeElement === document.body)) input.focus()
   }
 
   async function loadFirst() {
@@ -220,15 +229,12 @@ export function createGuidePanel(root: HTMLElement, opts: GuidePanelOptions): Gu
   box.addEventListener('keydown', (e) => {
     // Клавиши панели не должны доходить до игры и общего чата.
     e.stopPropagation()
-    if (e.key === 'Escape') {
-      e.preventDefault()
-      close()
-      opts.onClose(false)
-    } else if (e.code === 'KeyE' && e.target !== input && !e.repeat) {
-      e.preventDefault()
-      close()
-      opts.onClose(true)
-    }
+    if (e.repeat) return
+    const action = panelKeyAction(e.code, { typing: e.target === input, inputDisabled: input.disabled, opening: false })
+    if (!action) return
+    e.preventDefault()
+    close()
+    opts.onClose(action === 'close-lock')
   })
 
   return {
@@ -246,11 +252,14 @@ export function createGuidePanel(root: HTMLElement, opts: GuidePanelOptions): Gu
       box.hidden = false
       updateMeta()
       void loadFirst()
-      input.focus()
+      if (!input.disabled) input.focus()
     },
     close,
     get isOpen() {
       return guide !== null
+    },
+    get guideId() {
+      return guide?.id ?? null
     },
     showError(text, restore) {
       if (restore !== undefined && !input.value) input.value = restore

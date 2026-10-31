@@ -92,11 +92,11 @@ test('после reset поздние delta и completed ничего не ме�
   expect(asks.entries('g1', [])).toEqual([])
 })
 
-test('rejected возвращает текст вопроса и снимает его; чужой request_id → null', () => {
+test('rejected возвращает текст вопроса и гида и снимает его; чужой request_id → null', () => {
   const asks = asking()
   expect(asks.rejected('zzz')).toBeNull()
   expect(asks.active).not.toBeNull()
-  expect(asks.rejected('r1')).toBe('Кто автор?')
+  expect(asks.rejected('r1')).toEqual({ question: 'Кто автор?', guideId: 'g1' })
   expect(asks.active).toBeNull()
   expect(asks.entries('g1', [])).toEqual([])
 })

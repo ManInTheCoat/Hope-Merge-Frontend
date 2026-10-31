@@ -12,6 +12,7 @@ import { pickDoor, pickTarget, type Target } from './scene/targeting'
 import { createChat } from './ui/chat'
 import { chatKeyAction, chatLineText } from './ui/chatLog'
 import { askErrorText, GuideAsks } from './ui/guideAsks'
+import { panelKeyAction } from './ui/guideKeys'
 import { createGuidePanel } from './ui/guidePanel'
 import { createHud } from './ui/hud'
 import { createLoginScreen } from './ui/login'
@@ -131,9 +132,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
       if (!requestId) return 'Нет связи с сервером'
       asks.start({ requestId, guideId: guide.id, guideName: guide.display_name, question: text })
       setTimeout(() => {
-        if (session !== s) return
-        const question = asks.rejected(requestId)
-        if (question !== null) guidePanel.showError('Сервер не ответил, попробуйте ещё раз', question)
+        if (session === s) askFailed(requestId, 'Сервер не ответил, попробуйте ещё раз')
       }, ASK_ACCEPT_TIMEOUT_MS)
       return null
     },
@@ -150,6 +149,17 @@ export async function startGame(host: HTMLElement): Promise<void> {
     },
     onClose: (lock) => resumeControls(lock),
   })
+
+  /**
+   * Вопрос не принят. Текст возвращаем в поле, только если открыт тот же гид: иначе Enter отправил бы его
+   * другому гиду. В остальных случаях — сообщение поверх игры.
+   */
+  function askFailed(requestId: string, text: string) {
+    const r = asks.rejected(requestId)
+    if (!r) return
+    if (guidePanel.guideId === r.guideId) guidePanel.showError(text, r.question)
+    else hud.showMessage(`Вопрос гиду не отправлен: ${text}`)
+  }
 
   /** Общий чат или диалог закрыт: управление снова доступно; `lock` — сразу захватить мышь. */
   function resumeControls(lock: boolean) {
@@ -205,11 +215,19 @@ export async function startGame(host: HTMLElement): Promise<void> {
   document.addEventListener('keydown', (e) => {
     if (e.repeat) return
     // Фокус вне панели (клик мимо поля): Esc и E всё равно закрывают диалог.
-    if (guidePanel.isOpen && (e.code === 'Escape' || (e.code === 'KeyE' && !typingInField()))) {
-      e.preventDefault()
-      guidePanel.close()
-      resumeControls(e.code === 'KeyE')
-      return
+    // Нажатие E, открывшее панель, погашено в controls (defaultPrevented) и её не закрывает.
+    if (guidePanel.isOpen) {
+      const panelAction = panelKeyAction(e.code, {
+        typing: typingInField(),
+        inputDisabled: asks.active !== null,
+        opening: e.defaultPrevented,
+      })
+      if (panelAction) {
+        e.preventDefault()
+        guidePanel.close()
+        resumeControls(panelAction === 'close-lock')
+        return
+      }
     }
     const action = chatKeyAction(e.code, {
       chatOpen: chat.isOpen,
@@ -457,8 +475,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
       socket.on('error', (body, env) => {
         // Ошибки без request_id относятся к player.move: сервер отклонил структуру шага.
         if (!env.request_id) return console.warn('Сервер отклонил player.move:', body.code, body.message)
-        const question = asks.rejected(env.request_id)
-        if (question !== null) guidePanel.showError(askErrorText(body), question)
+        askFailed(env.request_id, askErrorText(body))
       })
       socket.onClose((code) => {
         if (session !== s || s.ac.signal.aborted) return
