@@ -27,6 +27,8 @@ type Session = {
   socket: GameSocket | null
   manifest: Manifest | null
   budget: AssetBudget | null
+  /** Отписка HUD от бюджета этой сессии. */
+  budgetOff: (() => void) | null
   built: BuiltRoom | null
   exhibits: Exhibit[]
   pos: Vec2
@@ -183,6 +185,12 @@ export async function startGame(host: HTMLElement): Promise<void> {
     if (!s) return
     s.ready = false
     s.ac.abort()
+    // Отписка до выгрузки зала: иначе release при unload снова покажет строку кеша.
+    s.budgetOff?.()
+    s.budgetOff = null
+    hud.showCache(null)
+    void hud.fade(false)
+    hud.fadeText(null)
     if (s.moveTimer) clearInterval(s.moveTimer)
     s.socket?.close()
     if (controls.locked) document.exitPointerLock() // иначе клик по кнопке «Повторить» уходит в захваченный canvas
@@ -225,6 +233,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
       socket: null,
       manifest: null,
       budget: null,
+      budgetOff: null,
       built: null,
       exhibits: [],
       pos: { x: 0, z: 0 },
@@ -285,6 +294,8 @@ export async function startGame(host: HTMLElement): Promise<void> {
       if (manifest.world_version !== snapshot.world_version) throw new Error('Версия мира не совпадает, обновите страницу')
       s.manifest = manifest
       s.budget = new AssetBudget(manifest.client_cache_limit_bytes)
+      hud.showCache({ used: 0, limit: s.budget.limit })
+      s.budgetOff = s.budget.onChange((used, limit) => hud.showCache({ used, limit }))
 
       rooms = makeRooms(snapshot.world_version, s.budget)
       const loaded = await rooms.load(snapshot.current_room, s.ac.signal)
@@ -355,6 +366,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
     last = now
     const s = session
 
+    if (s?.budget) hud.showMemory(renderer.info.memory.textures, renderer.info.memory.geometries)
     if (s?.ready && s.manifest && s.built) {
       const m = s.manifest.movement
       if (controls.locked && !cardFor) {
