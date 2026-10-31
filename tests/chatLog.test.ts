@@ -17,9 +17,9 @@ test('500 эмодзи допустимы, 501 — нет', () => {
 
 test('лента хранит последние 100', () => {
   const log = new ChatLog()
-  for (let i = 0; i < 105; i++) log.push({ id: String(i), author: 'a', color: null, text: 't' })
+  for (let i = 0; i < 105; i++) log.push({ author: 'a', color: null, text: String(i) })
   expect(log.lines.length).toBe(100)
-  expect(log.lines[0].id).toBe('5')
+  expect(log.lines[0].text).toBe('5')
   log.clear()
   expect(log.lines.length).toBe(0)
 })

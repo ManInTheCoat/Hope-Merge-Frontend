@@ -6,9 +6,9 @@ export type Pose2 = { x: number; z: number; yaw: number }
 
 /** Удалённых игроков рисуем с этим отставанием: между двумя известными точками, а не наугад. */
 export const RENDER_DELAY_MS = 100
-export const MAX_AGE_MS = 1000
+const MAX_AGE_MS = 1000
 /** Скачок дальше этого — телепорт: переставляем сразу, без «полёта» сквозь стены. */
-export const SNAP_DISTANCE_M = 2
+const SNAP_DISTANCE_M = 2
 
 export class SnapshotBuffer {
   private samples: Sample[] = []

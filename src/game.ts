@@ -19,6 +19,7 @@ import { RoomManager } from './world/RoomManager'
 const MOVE_SEND_INTERVAL_MS = 100
 const MAX_FRAME_DT = 0.1
 const MIN_MOVE_GAP_MS = 50
+const CHAT_SEND_TIMEOUT_MS = 10_000
 
 type Session = {
   ac: AbortController
@@ -39,6 +40,7 @@ type Session = {
 }
 
 function chatErrorText(e: unknown): string {
+  if (e instanceof Error && e.message === 'REQUEST_TIMEOUT') return 'Сервер не ответил, попробуйте ещё раз'
   const body = e as Partial<ErrorBody> | null
   if (body?.code === 'RATE_LIMITED') return `Слишком часто, подождите ${Math.ceil((body.retry_after_ms ?? 1000) / 1000)} с`
   return errorMessage(e)
@@ -92,7 +94,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
       const socket = session?.socket
       if (!socket?.isOpen) throw new Error('Нет связи с сервером')
       try {
-        await socket.request('chat.send', { text }, 'chat.message')
+        await socket.request('chat.send', { text }, 'chat.message', CHAT_SEND_TIMEOUT_MS)
       } catch (e) {
         throw new Error(chatErrorText(e))
       }
@@ -250,9 +252,8 @@ export async function startGame(host: HTMLElement): Promise<void> {
       snapshot.players.forEach((p) => s.players.upsert(p, t0))
       socket.on('player.joined', ({ player }) => s.players.upsert(player, performance.now()))
       socket.on('player.left', ({ user_id }) => s.players.remove(user_id))
-      socket.on('chat.message', ({ message_id, author, text, photo }) =>
+      socket.on('chat.message', ({ author, text, photo }) =>
         chat.add({
-          id: message_id,
           author: author.display_name,
           color: s.players.colorOf(author.user_id),
           text: chatLineText(text, photo !== null),
@@ -307,6 +308,8 @@ export async function startGame(host: HTMLElement): Promise<void> {
       // Отказ upgrade браузер видит как закрытие до snapshot: проверяем сессию (api.md §4).
       if (e instanceof Error && e.message.startsWith('SOCKET_CLOSED')) {
         const me = await fetchMe().catch(() => undefined)
+        // За время проверки пользователь мог выйти или зайти заново: тогда экран уже не наш.
+        if (session !== null || loginScreen.visible) return
         if (me === null) return showLogin()
       }
       hud.showLoading({ kind: 'error', message: `Не удалось загрузить зал: ${errorMessage(e)}`, onRetry: () => void connect() })

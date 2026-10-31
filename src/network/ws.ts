@@ -93,12 +93,21 @@ export class GameSocket {
     type: K,
     payload: ClientEvents[K],
     response: R,
+    /** Без ответа за это время промис отклоняется с REQUEST_TIMEOUT; не задан — ждём до закрытия сокета. */
+    timeoutMs?: number,
   ): Promise<ServerEvents[R]> {
     return new Promise((resolve, reject) => {
       const offs: Array<() => void> = []
       const cleanup = () => offs.forEach((off) => off())
       const request_id = this.send(type, payload)
       if (!request_id) return reject(new Error('SOCKET_CLOSED'))
+      if (timeoutMs !== undefined) {
+        const timer = setTimeout(() => {
+          cleanup()
+          reject(new Error('REQUEST_TIMEOUT'))
+        }, timeoutMs)
+        offs.push(() => clearTimeout(timer))
+      }
 
       offs.push(
         this.on(response, (p, env) => {

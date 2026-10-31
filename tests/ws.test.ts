@@ -131,3 +131,11 @@ test('неизвестный тип и битый JSON не роняют сок�
   expect(socket.isOpen).toBe(true)
   warn.mockRestore()
 })
+
+test('request без ответа отклоняется по тайм-ауту, поздний ответ игнорируется', async () => {
+  const { socket, fake } = await opened()
+  const p = socket.request('chat.send', { text: 'hi' }, 'chat.message', 20)
+  await expect(p).rejects.toThrow('REQUEST_TIMEOUT')
+  const rid = JSON.parse(fake.sent.at(-1)!).request_id
+  fake.serverSend('chat.message', { message_id: 'm', author: { user_id: 'u', display_name: 'u' }, text: 'hi', photo: null }, rid)
+})

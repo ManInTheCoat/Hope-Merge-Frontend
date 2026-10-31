@@ -113,6 +113,8 @@ export function createLoginScreen(root: HTMLElement, onSuccess: (user: User) => 
   })
 
   function hide() {
+    // Фокус в скрытом поле считался бы вводом текста, и Enter не открыл бы чат.
+    if (document.activeElement instanceof HTMLElement && screen.contains(document.activeElement)) document.activeElement.blur()
     screen.hidden = true
   }
 

@@ -1,7 +1,7 @@
 import { codePoints, trimWs } from './authForm'
 
 export const CHAT_MAX_LEN = 500
-export const CHAT_KEEP = 100
+const CHAT_KEEP = 100
 
 /** Текст после trim в кодовых точках 1–500, иначе null (api.md §6). */
 export function validateChatText(raw: string): string | null {
@@ -10,7 +10,7 @@ export function validateChatText(raw: string): string | null {
   return len >= 1 && len <= CHAT_MAX_LEN ? text : null
 }
 
-export type ChatLine = { id: string; author: string; color: string | null; text: string }
+export type ChatLine = { author: string; color: string | null; text: string }
 
 /** Фото в чате этот этап не показывает: сообщение только с фото выводим заглушкой. */
 export function chatLineText(text: string, hasPhoto: boolean): string {

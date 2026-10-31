@@ -1,3 +1,4 @@
+import { codePoints, trimWs } from './authForm'
 import { CHAT_MAX_LEN, ChatLog, validateChatText, type ChatLine } from './chatLog'
 
 const FADE_AFTER_MS = 10_000
@@ -9,7 +10,6 @@ export type Chat = {
   open(): void
   close(): void
   readonly isOpen: boolean
-  showError(text: string): void
   clear(): void
 }
 
@@ -48,10 +48,16 @@ export function createChat(root: HTMLElement, opts: ChatOptions): Chat {
   meta.className = 'chat-meta'
   box.appendChild(meta)
   meta.hidden = true
+  const hint = document.createElement('div')
+  hint.className = 'chat-hint'
+  hint.textContent = 'Enter — написать в чат'
+  box.appendChild(hint)
 
   const log = new ChatLog()
   let isOpen = false
   let sending = false
+  /** Номер текущего открытия поля: поздний ответ на отправку из прошлого открытия не трогает новое. */
+  let openId = 0
   let fadeTimer: ReturnType<typeof setTimeout> | undefined
 
   function wake() {
@@ -76,7 +82,7 @@ export function createChat(root: HTMLElement, opts: ChatOptions): Chat {
   }
 
   function updateMeta(error?: string) {
-    const len = [...input.value].length
+    const len = codePoints(trimWs(input.value))
     const counter = len > COUNTER_FROM ? `${len} / ${CHAT_MAX_LEN}` : ''
     meta.textContent = [error, counter].filter(Boolean).join(' · ')
     meta.classList.toggle('chat-meta--error', !!error)
@@ -86,8 +92,10 @@ export function createChat(root: HTMLElement, opts: ChatOptions): Chat {
   function close() {
     if (!isOpen) return
     isOpen = false
+    openId++
     box.classList.remove('chat--open')
     form.hidden = true
+    hint.hidden = false
     input.blur()
     updateMeta()
     logEl.scrollTop = logEl.scrollHeight
@@ -97,17 +105,21 @@ export function createChat(root: HTMLElement, opts: ChatOptions): Chat {
   form.addEventListener('submit', async (e) => {
     e.preventDefault()
     if (sending) return
-    const text = validateChatText(input.value)
-    if (text === null) return updateMeta(input.value.trim() ? `Не больше ${CHAT_MAX_LEN} символов` : undefined)
+    const raw = input.value
+    const text = validateChatText(raw)
+    if (text === null) return updateMeta(trimWs(raw) ? `Не больше ${CHAT_MAX_LEN} символов` : undefined)
+    const id = openId
     sending = true
     button.disabled = true
     try {
       await opts.onSend(text)
-      input.value = ''
+      if (input.value === raw) input.value = ''
+      // Поле успели закрыть (Esc) или открыть заново: игру и новое поле не трогаем.
+      if (id !== openId) return
       close()
       opts.onClose(true)
     } catch (err) {
-      updateMeta(err instanceof Error ? err.message : String(err))
+      if (id === openId) updateMeta(err instanceof Error ? err.message : String(err))
     } finally {
       sending = false
       button.disabled = false
@@ -135,6 +147,8 @@ export function createChat(root: HTMLElement, opts: ChatOptions): Chat {
     open() {
       if (isOpen) return
       isOpen = true
+      openId++
+      hint.hidden = true
       box.classList.add('chat--open')
       box.classList.remove('chat--faded')
       clearTimeout(fadeTimer)
@@ -145,9 +159,6 @@ export function createChat(root: HTMLElement, opts: ChatOptions): Chat {
     close,
     get isOpen() {
       return isOpen
-    },
-    showError(text) {
-      updateMeta(text)
     },
     clear() {
       log.clear()

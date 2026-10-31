@@ -1,6 +1,6 @@
 import { API_BASE, type AuthResponse, type HttpErrorBody, type Manifest, type MeResponse, type User } from './contract'
 
-export type ApiErrorExtra = { retry_after_ms?: number; fields?: Record<string, string> }
+type ApiErrorExtra = { retry_after_ms?: number; fields?: Record<string, string> }
 
 export class ApiError extends Error {
   readonly status: number

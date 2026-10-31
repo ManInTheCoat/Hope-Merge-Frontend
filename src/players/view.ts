@@ -29,7 +29,7 @@ function disposeLabel(label: THREE.Mesh) {
 export class RemotePlayersView {
   private readonly scene: THREE.Scene
   private readonly avatars = new Map<string, Avatar>()
-  // Общие для всех капсул: освобождаются только в dispose().
+  // Общие для всех капсул и живут, пока открыта страница: весят несколько килобайт.
   private readonly body = new THREE.CapsuleGeometry(RADIUS, HEIGHT - 2 * RADIUS).translate(0, HEIGHT / 2, 0)
   private readonly visor = new THREE.BoxGeometry(0.36, 0.1, 0.12)
   private readonly visorMaterial = new THREE.MeshLambertMaterial({ color: 0x1a1a1f })
@@ -75,13 +75,6 @@ export class RemotePlayersView {
   clear(): void {
     this.avatars.forEach((a) => this.remove(a))
     this.avatars.clear()
-  }
-
-  dispose(): void {
-    this.clear()
-    this.body.dispose()
-    this.visor.dispose()
-    this.visorMaterial.dispose()
   }
 
   private create(name: string, color: string): Avatar {
