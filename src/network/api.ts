@@ -1,4 +1,12 @@
-import { API_BASE, type AuthResponse, type HttpErrorBody, type Manifest, type MeResponse, type User } from './contract'
+import {
+  API_BASE,
+  type AuthResponse,
+  type GenerationsPage,
+  type HttpErrorBody,
+  type Manifest,
+  type MeResponse,
+  type User,
+} from './contract'
 
 type ApiErrorExtra = { retry_after_ms?: number; fields?: Record<string, string> }
 
@@ -73,6 +81,12 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
 
 export async function fetchManifest(signal?: AbortSignal): Promise<Manifest> {
   return (await apiFetch('/world/manifest', { signal })).json()
+}
+
+/** Последняя страница истории с гидом или страница старше `before` (api.md §7). */
+export async function fetchGenerations(guideId: string, before: string | null, signal?: AbortSignal): Promise<GenerationsPage> {
+  const cursor = before === null ? '' : `&before=${encodeURIComponent(before)}`
+  return (await apiFetch(`/guides/${encodeURIComponent(guideId)}/generations?limit=20${cursor}`, { signal })).json()
 }
 
 export async function fetchRoomText(roomId: string, version: string, maxBytes: number, signal?: AbortSignal): Promise<string> {
