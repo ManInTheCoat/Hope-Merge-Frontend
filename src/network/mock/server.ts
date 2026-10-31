@@ -15,6 +15,7 @@ import {
   type ServerEvents,
   type User,
 } from '../contract'
+import { wrapAngle } from '../../scene/input'
 import { START_POSITION, START_ROOM_ID, WORLD_VERSION, type MockWorld } from './world'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -22,6 +23,16 @@ const COLORS = ['#e57373', '#64b5f6', '#81c784', '#ffb74d', '#ba68c8']
 const GUIDE_REPLY =
   'Здравствуйте! Этот экспонат относится к раннему периоду коллекции. Обратите внимание на композицию и цвет: ' +
   'по ним специалисты определяют время и место создания. Если хотите, расскажу и о соседних работах.'
+
+const BOT_JOIN_DELAY_MS = 3_000
+const BOT_STAY_MS = 40_000
+const BOT_AWAY_MS = 10_000
+const BOT_CHAT_EVERY_MS = 30_000
+const BOT_REPLIES = ['Интересно!', 'Я тоже здесь впервые', 'Посмотрите на амфору у северной стены', 'Согласен', 'Красиво тут']
+const CHAT_LIMIT = 5
+const CHAT_WINDOW_MS = 10_000
+/** Код, который браузер видит при отказе upgrade (например, HTTP 401 до открытия WS). */
+const ABNORMAL_CLOSE = 1006
 
 type Account = { user: User; password: string; pose: Pose }
 type Session = { account: Account }
@@ -52,6 +63,8 @@ export function createMockServer(world: MockWorld): MockServer {
   const generations = new Map<string, Generation[]>()
   let session: Session | null = null
   let socket: MockSocket | null = null
+  /** Время отправки сообщений чата по user_id: окно не сбрасывается переподключением (api.md §9). */
+  const chatSends = new Map<string, number[]>()
 
   const now = () => new Date().toISOString()
   const newId = (prefix: string) => `${prefix}_${crypto.randomUUID().slice(0, 8)}`
@@ -239,7 +252,7 @@ export function createMockServer(world: MockWorld): MockServer {
       this.url = url
       const open = () => {
         const acc = session?.account
-        if (!acc) return this.fail(CloseCode.SessionExpired)
+        if (!acc) return this.fail(ABNORMAL_CLOSE)
         socket?.serverClose(CloseCode.Replaced)
         socket = this
         this.readyState = 1
@@ -260,10 +273,12 @@ export function createMockServer(world: MockWorld): MockServer {
           protocol_version: PROTOCOL_VERSION,
           world_version: WORLD_VERSION,
           self: this.self,
-          players: [this.botPlayer()],
+          players: [],
           current_room: world.rooms.get(pose.room_id)!.pkg,
         })
         this.stateTimer = setInterval(() => this.broadcastState(), 100)
+        this.later(() => this.botJoin(), BOT_JOIN_DELAY_MS)
+        this.later(() => this.botChatLoop(), BOT_CHAT_EVERY_MS)
       }
       this.later(open, 30)
       this.bot = {
@@ -282,8 +297,42 @@ export function createMockServer(world: MockWorld): MockServer {
     private botPlayer(): Player {
       const t = performance.now() / 4000
       this.bot.position = { x: Math.cos(t) * 3, y: 0, z: Math.sin(t) * 3 }
-      this.bot.rotation = { yaw: -t - Math.PI / 2, pitch: 0 }
+      // Касательная к кругу (−sin t, cos t); взгляд при yaw = 0 вдоль −Z, поэтому yaw = π − t.
+      this.bot.rotation = { yaw: wrapAngle(Math.PI - t), pitch: 0 }
       return this.bot
+    }
+
+    private botPresent = false
+
+    private botInRoom(): boolean {
+      return this.botPresent && this.self?.room_id === this.bot.room_id
+    }
+
+    private botJoin() {
+      this.botPresent = true
+      this.send_('player.joined', { player: { ...this.botPlayer() } })
+      this.later(() => this.botLeave(), BOT_STAY_MS)
+    }
+
+    private botLeave() {
+      this.botPresent = false
+      this.send_('player.left', { user_id: this.bot.user_id })
+      this.later(() => this.botJoin(), BOT_AWAY_MS)
+    }
+
+    private botSay(text: string) {
+      if (!this.botInRoom()) return
+      this.send_('chat.message', {
+        message_id: newId('msg'),
+        author: { user_id: this.bot.user_id, display_name: this.bot.display_name },
+        text,
+        photo: null,
+      })
+    }
+
+    private botChatLoop() {
+      this.botSay(BOT_REPLIES[Math.floor(Math.random() * BOT_REPLIES.length)])
+      this.later(() => this.botChatLoop(), BOT_CHAT_EVERY_MS)
     }
 
     private later(fn: () => void, ms: number) {
@@ -321,7 +370,7 @@ export function createMockServer(world: MockWorld): MockServer {
     private broadcastState() {
       if (!this.self) return
       const players = [this.self]
-      if (this.self.room_id === this.bot.room_id) players.push(this.botPlayer())
+      if (this.botPresent) players.push(this.botPlayer())
       this.send_('players.state', { players })
     }
 
@@ -416,7 +465,16 @@ export function createMockServer(world: MockWorld): MockServer {
           if (msg.payload.photo_id && (!photo || photo.owner !== acc.user.id)) {
             return this.error('NOT_FOUND', 'Фото не найдено', rid)
           }
+          const nowMs = performance.now()
+          const sent = (chatSends.get(acc.user.id) ?? []).filter((t) => nowMs - t < CHAT_WINDOW_MS)
+          chatSends.set(acc.user.id, sent)
+          if (sent.length >= CHAT_LIMIT) {
+            const retry_after_ms = Math.ceil(CHAT_WINDOW_MS - (nowMs - sent[0]))
+            return this.error('RATE_LIMITED', 'Слишком часто', rid, { retry_after_ms })
+          }
+          sent.push(nowMs)
           if (photo) photo.photo.published = true
+          this.later(() => this.botSay(BOT_REPLIES[Math.floor(Math.random() * BOT_REPLIES.length)]), 1000 + Math.random() * 1000)
           return this.send_(
             'chat.message',
             {

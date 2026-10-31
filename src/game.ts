@@ -1,20 +1,25 @@
 import * as THREE from 'three'
-import { fetchAssetBlob, fetchManifest, fetchRoomText } from './network/api'
-import type { ErrorBody, Exhibit, Manifest } from './network/contract'
-import { ensureDevSession } from './network/devAuth'
+import { fetchAssetBlob, fetchManifest, fetchMe, fetchRoomText, logout } from './network/api'
+import { CloseCode, type ErrorBody, type Exhibit, type Manifest } from './network/contract'
 import { GameSocket } from './network/ws'
+import { PlayerRegistry } from './players/registry'
+import { RemotePlayersView } from './players/view'
 import { moveCylinder, type Vec2 } from './scene/collision'
-import { FirstPersonControls } from './scene/controls'
+import { FirstPersonControls, typingInField } from './scene/controls'
 import { CLIENT_SPEED_FACTOR, moveVector, shouldSendMove } from './scene/input'
 import { buildRoom, type BuiltRoom } from './scene/roomBuilder'
 import { pickExhibit } from './scene/targeting'
+import { createChat } from './ui/chat'
+import { chatKeyAction, chatLineText } from './ui/chatLog'
 import { createHud } from './ui/hud'
+import { createLoginScreen } from './ui/login'
 import { MoveHistory } from './world/moveHistory'
 import { RoomManager } from './world/RoomManager'
 
 const MOVE_SEND_INTERVAL_MS = 100
 const MAX_FRAME_DT = 0.1
 const MIN_MOVE_GAP_MS = 50
+const CHAT_SEND_TIMEOUT_MS = 10_000
 
 type Session = {
   ac: AbortController
@@ -30,6 +35,15 @@ type Session = {
   lastMoveSentAt: number | null
   selfId: string
   history: MoveHistory
+  players: PlayerRegistry
+  roomId: string | null
+}
+
+function chatErrorText(e: unknown): string {
+  if (e instanceof Error && e.message === 'REQUEST_TIMEOUT') return 'Сервер не ответил, попробуйте ещё раз'
+  const body = e as Partial<ErrorBody> | null
+  if (body?.code === 'RATE_LIMITED') return `Слишком часто, подождите ${Math.ceil((body.retry_after_ms ?? 1000) / 1000)} с`
+  return errorMessage(e)
 }
 
 function errorMessage(e: unknown): string {
@@ -66,12 +80,87 @@ export async function startGame(host: HTMLElement): Promise<void> {
   let cardToken = 0
   let target: Exhibit | null = null
 
+  const view = new RemotePlayersView(scene)
+
   const controls = new FirstPersonControls(renderer.domElement, (locked) => {
     const s = session
-    hud.showClickOverlay(!locked && !!s?.ready, () => controls.lock())
+    hud.showClickOverlay(!locked && !!s?.ready && !chat.isOpen, () => controls.lock())
     if (!locked) closeCard()
   })
   controls.enabled = false
+
+  const chat = createChat(host, {
+    async onSend(text) {
+      const socket = session?.socket
+      if (!socket?.isOpen) throw new Error('Нет связи с сервером')
+      try {
+        await socket.request('chat.send', { text }, 'chat.message', CHAT_SEND_TIMEOUT_MS)
+      } catch (e) {
+        throw new Error(chatErrorText(e))
+      }
+    },
+    onClose: (sent) => afterChatClosed(sent),
+  })
+
+  function afterChatClosed(sent: boolean) {
+    const ready = !!session?.ready
+    controls.enabled = ready
+    // Оверлей нужен на случай, если захват не удастся; при успехе pointerlockchange его скроет.
+    hud.showClickOverlay(ready && !controls.locked, () => controls.lock())
+    if (sent && ready) controls.lock()
+  }
+
+  const loginScreen = createLoginScreen(host, () => void connect())
+
+  function showLogin() {
+    teardown(session)
+    hud.showLoading(null)
+    hud.showLogout(null)
+    loginScreen.show()
+  }
+
+  async function onLogout() {
+    teardown(session)
+    hud.showLogout(null)
+    hud.showLoading({ kind: 'loading', text: 'Выход…' })
+    // Ждём ответа: иначе поздний logout отзовёт уже новую сессию после быстрого повторного входа.
+    await logout().catch(() => {})
+    showLogin()
+  }
+
+  /** Старт и повтор: при живой сессии сразу в мир, иначе экран входа. */
+  async function enterWorld(): Promise<void> {
+    hud.showLoading({ kind: 'loading', text: 'Подключение…' })
+    let me
+    try {
+      me = await fetchMe()
+    } catch {
+      return hud.showLoading({ kind: 'error', message: 'Сервер недоступен', onRetry: () => void enterWorld() })
+    }
+    if (me) await connect()
+    else showLogin()
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.repeat) return
+    const action = chatKeyAction(e.code, {
+      chatOpen: chat.isOpen,
+      typing: typingInField(),
+      blocked: loginScreen.visible || !!cardFor || !session?.socket?.isOpen,
+    })
+    if (!action) return
+    e.preventDefault()
+    if (action === 'close') {
+      chat.close()
+      afterChatClosed(false)
+      return
+    }
+    chat.open()
+    controls.enabled = false
+    controls.keys.clear()
+    hud.showClickOverlay(false)
+    if (controls.locked) document.exitPointerLock()
+  })
 
   function resize() {
     renderer.setSize(window.innerWidth, window.innerHeight)
@@ -98,6 +187,10 @@ export async function startGame(host: HTMLElement): Promise<void> {
       scene.remove(s.built.group)
       s.built.dispose()
     }
+    s.players.clear()
+    view.clear()
+    chat.close()
+    chat.clear()
     rooms?.unload()
     if (session === s) session = null
     controls.enabled = false
@@ -138,11 +231,13 @@ export async function startGame(host: HTMLElement): Promise<void> {
       lastMoveSentAt: null,
       selfId: '',
       history: new MoveHistory(),
+      players: new PlayerRegistry(''),
+      roomId: null,
     }
     session = s
     hud.showLoading({ kind: 'loading', text: 'Загрузка зала…' })
+    hud.showLogout(() => void onLogout())
     try {
-      if (import.meta.env.VITE_USE_MOCK === 'true') await ensureDevSession()
       const { socket, snapshot } = await GameSocket.open()
       if (session !== s || s.ac.signal.aborted) {
         socket.close()
@@ -150,7 +245,22 @@ export async function startGame(host: HTMLElement): Promise<void> {
       }
       s.socket = socket
       s.selfId = snapshot.self.user_id
+      s.roomId = snapshot.current_room.room_id
+      s.players = new PlayerRegistry(s.selfId)
+      s.players.setSelf(snapshot.self)
+      const t0 = performance.now()
+      snapshot.players.forEach((p) => s.players.upsert(p, t0))
+      socket.on('player.joined', ({ player }) => s.players.upsert(player, performance.now()))
+      socket.on('player.left', ({ user_id }) => s.players.remove(user_id))
+      socket.on('chat.message', ({ author, text, photo }) =>
+        chat.add({
+          author: author.display_name,
+          color: s.players.colorOf(author.user_id),
+          text: chatLineText(text, photo !== null),
+        }),
+      )
       socket.on('players.state', ({ players }) => {
+        s.players.applyState(players, performance.now())
         const self = players.find((p) => p.user_id === s.selfId)
         if (!s.ready || !self || self.movement_epoch !== s.epoch) return
         const corrected = s.history.reconcile(self.ack_seq, self.position)
@@ -160,8 +270,9 @@ export async function startGame(host: HTMLElement): Promise<void> {
         // Ошибки без request_id относятся к player.move: сервер отклонил структуру шага.
         if (!env.request_id) console.warn('Сервер отклонил player.move:', body.code, body.message)
       })
-      socket.onClose(() => {
+      socket.onClose((code) => {
         if (session !== s || s.ac.signal.aborted) return
+        if (code === CloseCode.SessionExpired) return showLogin()
         teardown(s)
         hud.showLoading({ kind: 'error', message: 'Связь потеряна', onRetry: () => void connect() })
       })
@@ -188,12 +299,19 @@ export async function startGame(host: HTMLElement): Promise<void> {
 
       s.ready = true
       s.moveTimer = setInterval(() => sendMove(s), MOVE_SEND_INTERVAL_MS)
-      controls.enabled = true
+      controls.enabled = !chat.isOpen
       hud.showLoading(null)
-      hud.showClickOverlay(!controls.locked, () => controls.lock())
+      if (!chat.isOpen) hud.showClickOverlay(!controls.locked, () => controls.lock())
     } catch (e) {
       if (s.ac.signal.aborted || session !== s) return
       teardown(s)
+      // Отказ upgrade браузер видит как закрытие до snapshot: проверяем сессию (api.md §4).
+      if (e instanceof Error && e.message.startsWith('SOCKET_CLOSED')) {
+        const me = await fetchMe().catch(() => undefined)
+        // За время проверки пользователь мог выйти или зайти заново: тогда экран уже не наш.
+        if (session !== null || loginScreen.visible) return
+        if (me === null) return showLogin()
+      }
       hud.showLoading({ kind: 'error', message: `Не удалось загрузить зал: ${errorMessage(e)}`, onRetry: () => void connect() })
     }
   }
@@ -248,9 +366,10 @@ export async function startGame(host: HTMLElement): Promise<void> {
         ? null
         : pickExhibit({ eye: camera.position, dir, playerXZ: s.pos, colliders: s.built.colliders }, s.exhibits)
       hud.showHint(!cardFor && target && controls.locked ? `E — осмотреть: ${target.title}` : null)
+      if (s.roomId) view.update(s.players, s.roomId, now, camera)
     }
     renderer.render(scene, camera)
   })
 
-  await connect()
+  await enterWorld()
 }

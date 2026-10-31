@@ -1,13 +1,19 @@
-import { API_BASE, type HttpErrorBody, type Manifest } from './contract'
+import { API_BASE, type AuthResponse, type HttpErrorBody, type Manifest, type MeResponse, type User } from './contract'
+
+type ApiErrorExtra = { retry_after_ms?: number; fields?: Record<string, string> }
 
 export class ApiError extends Error {
   readonly status: number
   readonly code: string
+  readonly retryAfterMs?: number
+  readonly fields?: Record<string, string>
 
-  constructor(status: number, code: string, message: string) {
+  constructor(status: number, code: string, message: string, extra: ApiErrorExtra = {}) {
     super(message)
     this.status = status
     this.code = code
+    this.retryAfterMs = extra.retry_after_ms
+    this.fields = extra.fields
   }
 }
 
@@ -53,14 +59,16 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
   if (res.ok) return res
   let code = 'HTTP_ERROR'
   let message = `HTTP ${res.status}`
+  let extra: ApiErrorExtra = {}
   try {
     const body = (await res.json()) as HttpErrorBody
     code = body.error.code
     message = body.error.message
+    extra = { retry_after_ms: body.error.retry_after_ms, fields: body.error.fields }
   } catch {
     // тело не JSON — остаются значения по умолчанию
   }
-  throw new ApiError(res.status, code, message)
+  throw new ApiError(res.status, code, message, extra)
 }
 
 export async function fetchManifest(signal?: AbortSignal): Promise<Manifest> {
@@ -79,4 +87,32 @@ export async function fetchAssetBlob(assetId: string, version: string, maxBytes:
   const type = res.headers.get('Content-Type') ?? ''
   const bytes = await readLimited(res, maxBytes)
   return new Blob([bytes as BlobPart], { type })
+}
+
+const postJson = (path: string, body?: unknown) =>
+  apiFetch(path, {
+    method: 'POST',
+    ...(body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+  })
+
+export async function register(body: { username: string; display_name: string; password: string }): Promise<User> {
+  return ((await (await postJson('/auth/register', body)).json()) as AuthResponse).user
+}
+
+export async function login(body: { username: string; password: string }): Promise<User> {
+  return ((await (await postJson('/auth/login', body)).json()) as AuthResponse).user
+}
+
+export async function logout(): Promise<void> {
+  await postJson('/auth/logout')
+}
+
+/** `null` — сессии нет (401); остальные ошибки пробрасываются. */
+export async function fetchMe(): Promise<MeResponse | null> {
+  try {
+    return (await apiFetch('/me')).json()
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 401) return null
+    throw e
+  }
 }
