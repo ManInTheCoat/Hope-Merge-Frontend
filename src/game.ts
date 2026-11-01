@@ -22,7 +22,21 @@ import { FirstPersonControls, typingInField } from './scene/controls'
 import { CLIENT_SPEED_FACTOR, moveSendBudget, moveVector, shouldSendMove } from './scene/input'
 import { HandCamera } from './scene/handCamera'
 import { buildRoom } from './scene/roomBuilder'
-import { pickDoor, pickTarget, type Target } from './scene/targeting'
+import { pickDoor, pickTargetT, type Target } from './scene/targeting'
+import {
+  HELD_HINT,
+  holdsLamp,
+  keyAct,
+  lampErrorText,
+  lampHint,
+  pickLamp,
+  placeAct,
+  takeAct,
+  type LampTarget,
+} from './lamp/lampActions'
+import type { SundayObjectAct, SundayRoomRuntime } from './network/sunday'
+import { RENDER_DELAY_MS } from './players/interpolation'
+import { guideActionDoneText, guideActionErrorText } from './ui/guideAction'
 import { createChat } from './ui/chat'
 import { createControlsBar } from './ui/controlsBar'
 import { chatKeyAction, chatLineText } from './ui/chatLog'
@@ -49,6 +63,8 @@ const CHAT_SEND_TIMEOUT_MS = 10_000
 /** Без guide.accepted или error за это время проверяем вопрос по request_id. */
 const ASK_ACCEPT_TIMEOUT_MS = 10_000
 const GUIDE_CANCEL_TIMEOUT_MS = 10_000
+/** Команда лампе или просьба гиду без ответа за это время считается потерянной. */
+const SUNDAY_REQUEST_TIMEOUT_MS = 10_000
 /** Без world.entered за это время считаем подтверждение потерянным и переподключаемся (api.md, «Переход»). */
 const ENTER_TIMEOUT_MS = 10_000
 /** Аномальное закрытие (1006): так считаем потерю связи, обнаруженную самим клиентом. */
@@ -107,6 +123,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
   let cardToken = 0
   let target: Target = null
   let doorTarget: Door | null = null
+  let lampTarget: LampTarget | null = null
 
   const view = new RemotePlayersView(scene)
   /** Модели персонажей грузятся параллельно со входом; до загрузки (или при ошибке) — капсулы. */
@@ -166,6 +183,26 @@ export async function startGame(host: HTMLElement): Promise<void> {
       asks.start({ requestId, guideId: guide.id, guideName: guide.display_name, question: text })
       setTimeout(() => void recoverAsk(s, guide.id, requestId), ASK_ACCEPT_TIMEOUT_MS)
       return null
+    },
+    canAct: () => !!session && hasSunday(session.manifest),
+    async onAct(guide, text) {
+      const s = session
+      const rt = s?.sync.current
+      if (!s?.ready || !s.socket?.isOpen || !rt || !hasSunday(s.manifest)) throw new Error(NO_CONNECTION)
+      sendMove(s, true) // сервер меряет расстояние до гида по своей позиции
+      try {
+        const done = await s.socket.request(
+          'guide.action',
+          { guide_id: guide.id, text, movement_epoch: s.epoch, expected_revision: rt.revision },
+          'guide.action.completed',
+          SUNDAY_REQUEST_TIMEOUT_MS,
+        )
+        // Отправитель получает полный runtime только в ответе (остальным уходит world.runtime).
+        if (session === s && s.sync.accept(done.runtime)) applyRuntime(s)
+        return guideActionDoneText(done.effect)
+      } catch (e) {
+        throw new Error(guideActionErrorText(e))
+      }
     },
     async onCancel() {
       const socket = session?.socket
@@ -571,6 +608,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
     hud.showClickOverlay(false)
     target = null
     doorTarget = null
+    lampTarget = null
   }
 
   function showRoom(s: Session, loaded: LoadedRoom) {
@@ -616,6 +654,40 @@ export async function startGame(host: HTMLElement): Promise<void> {
     s.guides = mergeGuides(s.guides, rt)
   }
 
+  /**
+   * Команда лампе (api-sunday.md §4). Одна за раз: expected_revision берётся из последнего принятого runtime,
+   * поэтому следующая команда ждёт ответа предыдущей. Отправитель применяет runtime из ответа.
+   */
+  async function actLamp(s: Session, build: (rt: SundayRoomRuntime) => SundayObjectAct | null) {
+    const rt = s.sync.current
+    if (s.lampBusy || actionsLocked(s) || !s.socket?.isOpen || !rt || !hasSunday(s.manifest)) return
+    const act = build(rt)
+    if (!act) return
+    s.lampBusy = true
+    sendMove(s, true) // сервер меряет расстояние до места по своей позиции
+    try {
+      const done = await s.socket.request('object.act', act, 'object.acted', SUNDAY_REQUEST_TIMEOUT_MS)
+      if (session === s && s.sync.accept(done.runtime)) applyRuntime(s)
+    } catch (e) {
+      if (session === s) hud.showMessage(lampErrorText(e))
+    } finally {
+      s.lampBusy = false
+    }
+  }
+
+  /** E у лампы — взять, у слота с лампой в руках — поставить. */
+  function interactLamp(s: Session, t: LampTarget) {
+    const ctx = () => ({ movementEpoch: s.epoch, revision: s.sync.current?.revision ?? 0 })
+    void actLamp(s, () => (t.kind === 'lamp' ? takeAct(ctx()) : placeAct(ctx(), t.slotId)))
+  }
+
+  /** Q — вкл/выкл, Z/X — поворот, C/V — наклон головки: только для стоящей лампы, на которую смотрит игрок. */
+  function lampKey(code: string) {
+    const s = session
+    if (!s || lampTarget?.kind !== 'lamp') return
+    void actLamp(s, (rt) => (rt.lamp.holder_user_id === null ? keyAct(code, rt.lamp, { movementEpoch: s.epoch, revision: rt.revision }) : null))
+  }
+
   /** Перечитывает состояние зала (api-sunday.md §1): ответ придёт обычным world.runtime с этим request_id. */
   function requestRoomSync(s: Session) {
     if (!hasSunday(s.manifest) || !s.socket || s.lost) return
@@ -643,6 +715,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
     hud.showHint(null)
     target = null
     doorTarget = null
+    lampTarget = null
   }
 
   async function enterDoor(s: Session, door: Door): Promise<void> {
@@ -878,6 +951,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
     const s = session
     if (!s?.ready || !s.socket || !controls.locked) return
     if (!target) {
+      if (lampTarget) return interactLamp(s, lampTarget)
       if (doorTarget) void enterDoor(s, doorTarget)
       return
     }
@@ -899,6 +973,16 @@ export async function startGame(host: HTMLElement): Promise<void> {
       if (cardToken === token) closeCard()
       hud.showMessage(userErrorText(e))
     }
+  }
+
+  controls.onLampKey = lampKey
+
+  /** Поза игрока, несущего лампу: своя — по камере, чужая — по интерполяции; null, если лампу никто не несёт. */
+  function holderPose(s: Session, now: number): { x: number; z: number; yaw: number } | null {
+    const holder = s.sync.current?.lamp.holder_user_id
+    if (!holder) return null
+    if (holder === s.selfId) return { x: s.pos.x, z: s.pos.z, yaw: controls.yaw }
+    return s.players.poseOf(holder, now - RENDER_DELAY_MS)
   }
 
   const dir = new THREE.Vector3()
@@ -937,26 +1021,37 @@ export async function startGame(host: HTMLElement): Promise<void> {
 
       if (s.ready) {
         camera.getWorldDirection(dir)
-        target = cardFor
-          ? null
-          : pickTarget({ eye: camera.position, dir, colliders: s.built.colliders, rangeFrom: s.path.sent }, s.exhibits, s.guides)
-        // Экспонат или гид в прицеле важнее двери рядом. Расстояние — от позиции, которую уже знает сервер:
+        const look = { eye: camera.position, dir, colliders: s.built.colliders, rangeFrom: s.path.sent }
+        const hit = cardFor ? { target: null, t: Infinity } : pickTargetT(look, s.exhibits, s.guides)
+        const rt = s.sync.current
+        const lampHit = !cardFor && rt && hasSunday(s.manifest) ? pickLamp(look, rt, s.selfId) : null
+        // Лампа ближе картины или гида по лучу — выбираем её.
+        const lampWins = !!lampHit && lampHit.t < hit.t
+        target = lampWins ? null : hit.target
+        lampTarget = lampWins ? lampHit!.target : null
+        // Предмет в прицеле важнее двери рядом. Расстояние — от позиции, которую уже знает сервер:
         // подсказка появляется, только когда он примет действие.
-        doorTarget = cardFor || target ? null : pickDoor(s.path.sent, s.doors, s.built.colliders)
+        doorTarget = cardFor || target || lampTarget ? null : pickDoor(s.path.sent, s.doors, s.built.colliders)
+        const heldByMe = holdsLamp(rt, s.selfId)
         const hint =
           target?.kind === 'exhibit'
             ? `E — осмотреть: ${target.exhibit.title}`
             : target?.kind === 'guide'
               ? `E — поговорить: ${target.guide.display_name}`
-              : doorTarget
-                ? `E — перейти: ${doorTarget.label}`
-                : null
+              : lampTarget
+                ? lampHint(lampTarget)
+                : doorTarget
+                  ? `E — перейти: ${doorTarget.label}`
+                  : heldByMe
+                    ? HELD_HINT
+                    : null
         // Действие недоступно (фото, переход, переподключение, открытая панель) — подсказку не показываем.
         hud.showHint(!cardFor && controls.locked && !actionsLocked(s) && !guidePanel.isOpen && !adminPanel.isOpen ? hint : null)
       }
       if (s.roomId) view.update(s.players, s.roomId, now, camera)
       // Табличка — дочерний узел повёрнутой фигуры гида: мировой поворот к камере задаём через родителя.
       s.built.runtime.update(dt)
+      s.built.runtime.setHolderPose(holderPose(s, now))
       // Посетители: позы нужны и для реплики «пропустите». Она только пока игра готова и ничто не перекрывает экран.
       const poses = s.crowd?.update(dt, now, s.ready ? s.path.sent : null) ?? []
       const asked = s.passRequest.update(now, s.ready ? s.path.sent : null, poses)

@@ -1,6 +1,7 @@
 import type { Generation, GenerationsPage, Guide } from '../network/contract'
 import { inputMeta, trimWs } from './text'
 import { GUIDE_MAX_LEN, validateGuideText, type GuideAsks } from './guideAsks'
+import { GUIDE_ACTION_EXAMPLES, GUIDE_ACTION_MAX_LEN, validateGuideAction } from './guideAction'
 import { panelKeyAction } from './guideKeys'
 import { el } from './dom'
 
@@ -19,6 +20,10 @@ export type GuidePanelOptions = {
   loadPage(guideId: string, before: string | null): Promise<GenerationsPage>
   /** Отправить вопрос; вернуть текст ошибки или null, если ушёл. */
   onAsk(guide: Guide, text: string): string | null
+  /** Есть ли у зала просьбы гиду (Sunday v1): без этого кнопки «Изменить экспозицию» нет. */
+  canAct(): boolean
+  /** Отправить просьбу изменить экспозицию; промис — текст результата, отказ — Error с текстом для игрока. */
+  onAct(guide: Guide, text: string): Promise<string>
   /** Отменить активный вопрос; промис отклоняется с текстом ошибки. */
   onCancel(): Promise<void>
   /** Панель закрыта игроком (E или ✕): вернуть управление и захват мыши. */
@@ -72,6 +77,23 @@ export function createGuidePanel(root: HTMLElement, opts: GuidePanelOptions): Gu
   sendBtn.type = 'submit'
   sendBtn.textContent = 'Спросить'
   const meta = el('div', 'guide-meta', box)
+
+  // Просьба изменить экспозицию — отдельная команда, а не вопрос: свой переключатель, поле и ответ.
+  const actToggle = el('button', 'guide-act-toggle', box)
+  actToggle.type = 'button'
+  actToggle.textContent = 'Изменить экспозицию'
+  actToggle.hidden = true
+  const actForm = el('form', 'guide-form guide-act-form', box)
+  actForm.hidden = true
+  const actInput = el('input', 'guide-input', actForm)
+  actInput.maxLength = GUIDE_ACTION_MAX_LEN * 2 // maxlength считает UTF-16; точный предел — в validateGuideAction
+  actInput.placeholder = `Например: ${GUIDE_ACTION_EXAMPLES[0]}`
+  actInput.autocomplete = 'off'
+  const actSend = el('button', 'guide-send', actForm)
+  actSend.type = 'submit'
+  actSend.textContent = 'Попросить'
+  const actStatus = el('div', 'guide-meta guide-act-status', box)
+  actStatus.hidden = true
 
   let guide: Guide | null = null
   let history: Generation[] = []
@@ -190,12 +212,29 @@ export function createGuidePanel(root: HTMLElement, opts: GuidePanelOptions): Gu
     logEl.scrollTop = logEl.scrollHeight - fromBottom
   }
 
+  function setActStatus(text: string, isError: boolean) {
+    actStatus.textContent = text
+    actStatus.hidden = !text
+    actStatus.classList.toggle('guide-meta--error', isError)
+  }
+
+  function setActOpen(open: boolean) {
+    actForm.hidden = !open
+    if (!open) setActStatus('', false)
+    if (open) actInput.focus()
+    else if (document.activeElement === actInput) input.focus()
+  }
+
   function close() {
     if (!guide) return
     guide = null
     openId++
     box.hidden = true
     input.blur()
+    actInput.blur()
+    actInput.value = ''
+    actForm.hidden = true
+    setActStatus('', false)
   }
 
   asks.onChange(render)
@@ -218,6 +257,29 @@ export function createGuidePanel(root: HTMLElement, opts: GuidePanelOptions): Gu
   })
   input.addEventListener('input', () => updateMeta())
 
+  actToggle.addEventListener('click', () => setActOpen(actForm.hidden === true))
+  actForm.addEventListener('submit', async (e) => {
+    e.preventDefault()
+    if (!guide || actSend.disabled) return
+    const text = validateGuideAction(actInput.value)
+    if (text === null) return setActStatus(`От 1 до ${GUIDE_ACTION_MAX_LEN} символов`, true)
+    const openedFor = openId
+    actSend.disabled = actInput.disabled = true
+    setActStatus('Отправляем…', false)
+    try {
+      const done = await opts.onAct(guide, text)
+      if (openedFor !== openId) return
+      actInput.value = ''
+      setActStatus(done, false)
+    } catch (err) {
+      if (openedFor !== openId) return
+      setActStatus(err instanceof Error ? err.message : String(err), true)
+    } finally {
+      actSend.disabled = actInput.disabled = false
+      if (openedFor === openId && !actForm.hidden) actInput.focus()
+    }
+  })
+
   cancelBtn.addEventListener('click', async () => {
     asks.setCancelling(true)
     try {
@@ -233,7 +295,7 @@ export function createGuidePanel(root: HTMLElement, opts: GuidePanelOptions): Gu
     // Клавиши панели не должны доходить до игры и общего чата.
     e.stopPropagation()
     if (e.repeat) return
-    if (!panelKeyAction(e.code, { typing: e.target === input, inputDisabled: input.disabled, opening: false })) return
+    if (!panelKeyAction(e.code, { typing: e.target === input || e.target === actInput, inputDisabled: input.disabled, opening: false })) return
     e.preventDefault()
     close()
     opts.onClose()
@@ -258,6 +320,9 @@ export function createGuidePanel(root: HTMLElement, opts: GuidePanelOptions): Gu
       subtitleEl.textContent = g.subtitle
       subtitleEl.hidden = !g.subtitle
       box.hidden = false
+      actToggle.hidden = !opts.canAct()
+      actForm.hidden = true
+      setActStatus('', false)
       updateMeta()
       void loadFirst()
       if (!input.disabled) input.focus()

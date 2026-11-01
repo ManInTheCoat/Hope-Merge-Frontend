@@ -1,4 +1,5 @@
 import { wrapAngle } from './angles'
+import { LAMP_KEYS } from '../lamp/lampActions'
 import { MoveKeys } from './input'
 
 const SENSITIVITY = 0.002
@@ -18,6 +19,8 @@ export class FirstPersonControls {
   /** false: клавиши и мышь игнорируются (загрузка, открытая карточка). */
   enabled = true
   onInteract: (() => void) | null = null
+  /** Клавиши настройки лампы (вкл/выкл, поворот, наклон): нажатие без повтора. */
+  onLampKey: ((code: string) => void) | null = null
 
   private readonly el: HTMLElement
   private readonly onLockChange: (locked: boolean) => void
@@ -42,6 +45,10 @@ export class FirstPersonControls {
         // а другие обработчики по defaultPrevented видят, что нажатие уже обработано.
         e.preventDefault()
         if (!e.repeat) this.onInteract?.()
+        return
+      }
+      if (LAMP_KEYS.has(e.code)) {
+        if (!e.repeat) this.onLampKey?.(e.code)
         return
       }
       this.keys.onKeyDown(e.code)

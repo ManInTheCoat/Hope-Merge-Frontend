@@ -91,6 +91,27 @@ test('лампа: on=false гасит свет, не удаляя источни
   expect(b.group.children.filter((o) => o.name === 'lamp_01')).toHaveLength(1)
 })
 
+test('лампа в руках: у игрока справа и на метр выше пола, головка по его yaw; пропал держатель — скрыта', () => {
+  const b = built()
+  b.runtime.apply(rt((r) => (r.lamp.holder_user_id = 'user_1')))
+  const lamp = find(b, 'lamp_01')!
+  b.runtime.setHolderPose({ x: 5, z: 6, yaw: 0 })
+  expect(lamp.visible).toBe(true)
+  expect(lamp.position.toArray()).toEqual([5.35, 1, 6])
+  const spot = lamp.getObjectByProperty('isSpotLight', true) as THREE.SpotLight
+  const dir = spot.target.getWorldPosition(new THREE.Vector3()).sub(spot.getWorldPosition(new THREE.Vector3())).normalize()
+  expect(dir.distanceTo(lampDirection(0, 0))).toBeLessThan(1e-6)
+  b.runtime.setHolderPose({ x: 5, z: 6, yaw: Math.PI / 2 })
+  expect(lamp.position.z).toBeCloseTo(5.65)
+  b.runtime.setHolderPose(null)
+  expect(lamp.visible).toBe(false)
+  // поставили: лампа снова на слоте, поза держателя больше не действует
+  b.runtime.apply(rt((r) => ((r.revision = 2), (r.lamp.holder_user_id = null))))
+  b.runtime.setHolderPose({ x: 5, z: 6, yaw: 0 })
+  expect(lamp.visible).toBe(true)
+  expect(lamp.position.x).toBe(3)
+})
+
 test('лампа в руках игрока на слоте не рисуется', () => {
   const b = built()
   b.runtime.apply(rt((r) => (r.lamp.holder_user_id = 'user_1')))

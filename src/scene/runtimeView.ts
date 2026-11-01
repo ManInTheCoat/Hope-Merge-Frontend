@@ -3,12 +3,15 @@ import type { Room } from '../network/contract'
 import type { SundayConfigLighting, SundayRoomRuntime } from '../network/sunday'
 import { createInstallation, STAND_OFFSET, type InstallationView } from './installation'
 import { createLamp, SPOT_COLORS, type LampView } from './lamp'
+import { heldPosition, type HeldPose } from '../lamp/lampActions'
 import type { GuideActor } from './roomBuilder'
 
 /** Живое состояние зала по `world.runtime`: отделка, свет, гиды, стенд и лампа. Принадлежит построенному залу. */
 export type RuntimeView = {
   /** Применяет полный снимок: идемпотентно, лишнего не пересоздаёт. */
   apply(runtime: SundayRoomRuntime): void
+  /** Где сейчас держащий лампу (каждый кадр); null — его нет в зале, лампа скрыта. Без держателя не действует. */
+  setHolderPose(pose: HeldPose | null): void
   update(dtS: number): void
   dispose(): void
 }
@@ -49,6 +52,15 @@ export function createRuntimeView(parts: RuntimeViewParts): RuntimeView {
   let lamp: LampView | null = null
   let stand: InstallationView | null = null
   const guideSeen = new Map<string, string>()
+  let held = false
+  let heldPose: HeldPose | null = null
+
+  /** Лампа в руках стоит у игрока, иначе на своём слоте (его положение apply() уже задал). */
+  function placeHeld() {
+    if (!lamp || !held) return
+    lamp.object.visible = heldPose !== null
+    if (heldPose) lamp.carry(heldPosition(heldPose), heldPose.yaw)
+  }
 
   return {
     apply(rt) {
@@ -85,9 +97,14 @@ export function createRuntimeView(parts: RuntimeViewParts): RuntimeView {
           group.add(lamp.object)
         }
         lamp.apply(rt.lamp, slot.position, config.lighting)
-        // Лампу в руках игрока показывает отдельная логика переноса; на слоте её в этот момент нет.
-        lamp.object.visible = rt.lamp.holder_user_id === null
+        held = rt.lamp.holder_user_id !== null
+        lamp.object.visible = true
+        placeHeld()
       }
+    },
+    setHolderPose(pose) {
+      heldPose = pose
+      placeHeld()
     },
     update(dtS) {
       if (stand?.object.visible) stand.update(dtS)

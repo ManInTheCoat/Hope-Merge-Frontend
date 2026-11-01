@@ -29,6 +29,8 @@ export type LampView = {
   spot: THREE.SpotLight
   /** Положение (слот), углы, включённость и цвет света. */
   apply(lamp: SundayLamp, slot: { x: number; y: number; z: number }, lighting: SundayConfigLighting): void
+  /** Лампа в руках: положение у игрока, головка смотрит по его yaw (api-sunday.md §2). После apply() возвращается на слот. */
+  carry(position: { x: number; y: number; z: number }, yaw: number): void
   dispose(): void
 }
 
@@ -74,6 +76,11 @@ export function createLamp(): LampView {
       // Свет не удаляем и не добавляем: смена числа источников пересобирает шейдеры всей сцены.
       spot.intensity = lamp.on ? SPOT_INTENSITY : 0
       bulb.emissiveIntensity = lamp.on ? 1 : 0.05
+    },
+    carry(position, yaw) {
+      object.position.set(position.x, position.y, position.z)
+      head.rotation.y = yaw
+      head.rotation.x = -BASE_TILT
     },
     dispose() {
       owned.forEach((x) => x.dispose())

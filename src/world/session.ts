@@ -55,6 +55,8 @@ export type Session = {
   photo: LastPhoto | null
   /** Идут съёмка или загрузка фото: движение и переходы заблокированы. */
   photoBusy: boolean
+  /** Идёт команда лампе: следующая ждёт её ответа, иначе expected_revision устареет. */
+  lampBusy: boolean
   /** Игра хоть раз была готова (world.ready): закрытие сокета дальше — обрыв, а не неудачный вход. */
   joined: boolean
   /** Связь потеряна: сцена ещё на экране, но сессия ждёт переподключения и её события не обрабатываются. */
@@ -92,6 +94,7 @@ export function newSession(): Session {
     gestures: new GestureTracker(),
     photo: null,
     photoBusy: false,
+    lampBusy: false,
     joined: false,
     lost: false,
   }

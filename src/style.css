@@ -485,6 +485,18 @@ canvas {
   cursor: default;
 }
 
+.guide-act-toggle {
+  align-self: flex-start;
+  padding: 4px 10px;
+  border: 1px solid #888;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
 .guide-meta {
   font-size: 12px;
   opacity: 0.8;
