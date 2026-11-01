@@ -4,6 +4,10 @@ import type { GameSocket } from '../network/ws'
 import type { LastPhoto } from '../photo/lastPhoto'
 import { PlayerRegistry } from '../players/registry'
 import { RoomSync } from '../room/sync'
+import type { Crowd } from '../npc/crowd'
+import { NpcSync } from '../npc/npcSync'
+import { PassRequest } from '../npc/passRequest'
+import { GestureTracker } from '../scene/guideGesture'
 import type { MoveWorld, Vec2 } from '../scene/collision'
 import type { BuiltRoom } from '../scene/roomBuilder'
 import type { AssetBudget } from './AssetBudget'
@@ -41,6 +45,12 @@ export type Session = {
   roomId: string | null
   /** Runtime зала (Sunday v1): последний принятый снимок и лимит room.sync. */
   sync: RoomSync
+  /** Посетители зала (npc.state): приём снимков, сцена и реплика «пропустите». */
+  npcSync: NpcSync
+  crowd: Crowd | null
+  passRequest: PassRequest
+  /** Гиды, которые сейчас отвечают (жестикулируют). */
+  gestures: GestureTracker
   /** Последний снимок; создаётся вместе с бюджетом подключения. */
   photo: LastPhoto | null
   /** Идут съёмка или загрузка фото: движение и переходы заблокированы. */
@@ -76,6 +86,10 @@ export function newSession(): Session {
     players: new PlayerRegistry(''),
     roomId: null,
     sync: new RoomSync(null, ''),
+    npcSync: new NpcSync(null, ''),
+    crowd: null,
+    passRequest: new PassRequest(),
+    gestures: new GestureTracker(),
     photo: null,
     photoBusy: false,
     joined: false,
@@ -100,6 +114,10 @@ export function applySelf(s: Session, self: Player, view: { yaw: number; pitch: 
 
 /** Полностью освобождает зал: сцена, геометрия, текстуры, bitmap и резервы бюджета. Повторный вызов ничего не делает. */
 export function unloadRoom(s: Session, scene: { remove(o: THREE.Object3D): unknown }, manager: RoomManager | null): void {
+  s.crowd?.dispose()
+  s.crowd = null
+  s.gestures.clear()
+  s.passRequest = new PassRequest()
   if (s.built) {
     scene.remove(s.built.group)
     s.built.dispose()

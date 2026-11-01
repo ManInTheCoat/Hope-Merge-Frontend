@@ -49,6 +49,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Остальное по папкам:** `scene/` — построение зала из `Room`, управление, прицел; `players/` — удалённые игроки с интерполяцией (`RENDER_DELAY_MS`); `ui/` — HTML-интерфейс (HUD, чат, панель гида, вход, карточка фото); `photo/` — съёмка кадра, сжатие до 2 МиБ, загрузка с `Idempotency-Key`; `admin/` — чистая логика админки (формы гида и зала, строки таблицы клиентов, сохранение с разбором `REVISION_CONFLICT`), сама панель — `ui/adminPanel.ts`, HTTP — `network/adminApi.ts`.
 
+**Посетители (NPC) и жест гида** (`api-sunday.md` §5). `npc/` — приём `npc.state` (`NpcSync`: зал, версия, instance, seq), интерполяция 200 мс (`NpcBuffers`), походка и поворот головы (`gait.ts`), раскладка частей (`layout.ts`), `crowd.ts` — по одному `InstancedMesh` на часть тела без теней и текстур, `passRequest.ts` — реплика «Простите, можно пройти?» внизу экрана, когда `idle`-NPC упёрся в игрока (HUD: `showRequest`). Жест гида — `scene/guideGesture.ts` (`GestureTracker`: от `guide.started` до `guide.completed`/`guide.failed`). Мок ведёт посетителей в `network/mock/npc.ts` (`NpcSim`, FSM 5 Гц, маршруты детерминированы `world_version+room_id+индекс`; дела: смотреть картину, подойти к гиду, выйти в дверь и вернуться; максимум `NPC_MAX = 10` в `npc/limits.ts`), `server.ts` рассылает `npc.state` и привязывает симуляцию к залу игрока.
+
 **Тексты для игрока** собираются через `userErrorText` (`src/ui/errorText.ts`). Технические коды (`SOCKET_CLOSED:1006`, `REQUEST_TIMEOUT` и т. п.) игроку не показываются. Длина пользовательского текста считается в кодовых точках после `trimWs` (`src/ui/text.ts`), как на сервере.
 
 ## Тесты

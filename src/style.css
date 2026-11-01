@@ -30,6 +30,7 @@ canvas {
 }
 
 .hud-hint,
+.hud-request,
 .hud-message {
   position: absolute;
   left: 50%;
@@ -42,6 +43,13 @@ canvas {
 
 .hud-hint {
   top: calc(50% + 40px);
+}
+
+.hud-request {
+  bottom: 150px; /* над сообщением и подсказками */
+  max-width: min(480px, 90vw);
+  text-align: center;
+  font-style: italic;
 }
 
 .hud-message {

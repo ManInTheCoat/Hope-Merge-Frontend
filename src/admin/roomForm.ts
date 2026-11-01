@@ -1,4 +1,5 @@
 import type { SundayConfigLighting, SundayRoomConfig, SundayRoomRuntime } from '../network/sunday'
+import { NPC_MAX } from '../npc/limits'
 
 /** Черновик формы зала: числа — строками, как в полях ввода; углы гидов — в градусах. */
 export type RoomDraft = {
@@ -9,7 +10,6 @@ export type RoomDraft = {
   guides: Array<{ guide_id: string; x: string; z: string; rotation_deg: string }>
 }
 
-const NPC_MAX = 40
 const COLOR_RE = /^#[0-9A-Fa-f]{6}$/
 
 /** Угол в градусах с точностью до 0,1°, как его видит администратор. */

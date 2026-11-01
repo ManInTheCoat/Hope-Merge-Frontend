@@ -50,6 +50,7 @@ export function createGuideActor(library: CharacterLibrary): GuideFactory {
     object.add(figure.root, shadow, label0)
 
     let wasNear = false
+    let gesturing = false
     const actor: GuideActor = {
       id: g.id,
       object,
@@ -64,11 +65,15 @@ export function createGuideActor(library: CharacterLibrary): GuideFactory {
         figure.root.rotation.y += Math.abs(diff) <= step ? diff : Math.sign(diff) * step
         if (near && !wasNear && !figure.busy) figure.play('emote-yes', 0.2, true)
         wasNear = near
-        if (!figure.busy) figure.play('idle')
+        // Жест — зацикленный клип руки, пока гид отвечает; разовые кивки (busy) его прерывают.
+        if (!figure.busy) figure.play(gesturing ? 'interact-right' : 'idle')
         figure.update(dtS)
       },
       greet() {
         figure.play('emote-yes', 0.15, true)
+      },
+      setGesturing(on) {
+        gesturing = on
       },
       place(position, rotationY) {
         object.position.set(position.x, position.y, position.z)

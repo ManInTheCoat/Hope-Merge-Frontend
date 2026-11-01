@@ -3,6 +3,8 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { SERVER_EVENT_TYPES } from '../src/network/contract'
 import { GameSocket } from '../src/network/ws'
+import { NpcBuffers } from '../src/npc/npcBuffer'
+import { NpcSync } from '../src/npc/npcSync'
 
 const DIR = join(import.meta.dir, 'fixtures', 'sunday')
 const fixture = (name: string) => JSON.parse(readFileSync(join(DIR, name), 'utf8'))
@@ -78,4 +80,16 @@ test('fixtures клиентских команд покрывают все кл�
   for (const n of ['room.sync', 'object.act.take', 'guide.action', 'client.metrics', 'telemetry.pong']) {
     expect(names).toContain(`${n}.json`)
   }
+})
+
+test('fixture npc.state принимается NpcSync и раскладывается NpcBuffers', () => {
+  const p = fixture('npc.state.json').payload
+  const sync = new NpcSync(p.room_id, p.world_version)
+  expect(sync.accept(p)).toBe(true)
+  expect(sync.accept(p)).toBe(false) // тот же seq той же instance
+  const buffers = new NpcBuffers()
+  buffers.apply(p.npcs, 1000)
+  const poses = buffers.sample(1300)
+  expect(poses.map((n) => n.id)).toEqual(p.npcs.map((n: { npc_id: string }) => n.npc_id).sort())
+  for (const n of poses) expect(Number.isFinite(n.x + n.z + n.yaw)).toBe(true)
 })

@@ -8,6 +8,8 @@ export type LoadingState = null | { kind: 'loading'; text: string } | { kind: 'e
 
 export type Hud = {
   showHint(text: string | null): void
+  /** Реплика посетителя, просящего пройти: одна строка внизу экрана; null скрывает её. */
+  showRequest(text: string | null): void
   showCard(card: ExhibitCard | null): void
   showMessage(text: string, ms?: number): void
   showClickOverlay(visible: boolean, onClick?: () => void): void
@@ -38,6 +40,8 @@ export function createHud(root: HTMLElement): Hud {
   el('div', 'hud-crosshair', root)
   const hint = el('div', 'hud-hint', root)
   hint.hidden = true
+  const request = el('div', 'hud-request', root)
+  request.hidden = true
   const message = el('div', 'hud-message', root)
   message.hidden = true
 
@@ -108,6 +112,7 @@ export function createHud(root: HTMLElement): Hud {
 
   let messageTimer: ReturnType<typeof setTimeout> | undefined
   let hintText: string | null = null
+  let requestText: string | null = null
 
   return {
     showHint(text) {
@@ -115,6 +120,12 @@ export function createHud(root: HTMLElement): Hud {
       hintText = text
       hint.hidden = text === null
       if (text !== null) hint.textContent = text
+    },
+    showRequest(text) {
+      if (text === requestText) return // вызывается каждый кадр
+      requestText = text
+      request.hidden = text === null
+      if (text !== null) request.textContent = text
     },
     showCard(c) {
       card.hidden = c === null
