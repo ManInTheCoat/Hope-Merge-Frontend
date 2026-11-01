@@ -4,7 +4,7 @@ import { closestOnBox, surfacesToColliders, type Aabb, type Bounds2, type Vec2 }
 import { gestureWeight } from './guideGesture'
 import { disposeLabel, makeLabel } from './labels'
 import type { GalleryLook } from './galleryLook'
-import { createRuntimeView, type RuntimeView } from './runtimeView'
+import { createRuntimeView, type PaintingView, type RuntimeView } from './runtimeView'
 import { classifySurface } from './surfaceKind'
 
 export type BuiltRoom = {
@@ -187,6 +187,7 @@ export function buildRoom(
   // сервера, коллайдера у неё нет.
   if (!hasCeiling) group.add(decorativeCeiling(room.bounds, look))
 
+  const paintings: PaintingView[] = []
   for (const e of room.exhibits) {
     const bitmap = bitmaps.get(e.image_asset_id)
     let material: THREE.MeshBasicMaterial
@@ -204,6 +205,7 @@ export function buildRoom(
     mesh.position.set(e.position.x, e.position.y, e.position.z)
     mesh.rotation.y = e.rotation_y
     mesh.userData = { kind: 'exhibit', id: e.id }
+    paintings.push({ material, position: { x: e.position.x, y: e.position.y, z: e.position.z }, rotation_y: e.rotation_y })
 
     if (look) {
       mesh.add(look.exhibitFrame(e.width_m, e.height_m))
@@ -250,7 +252,7 @@ export function buildRoom(
     group.add(actor.object)
   }
 
-  const runtime = createRuntimeView({ group, bounds: room.bounds, walls, ambient, sun, guides, textured: !!look })
+  const runtime = createRuntimeView({ group, bounds: room.bounds, walls, ambient, sun, paintings, guides, textured: !!look })
 
   return {
     group,

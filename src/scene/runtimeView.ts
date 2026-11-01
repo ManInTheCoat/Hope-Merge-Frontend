@@ -2,7 +2,8 @@ import * as THREE from 'three'
 import type { Room } from '../network/contract'
 import type { SundayConfigLighting, SundayRoomRuntime } from '../network/sunday'
 import { createInstallation, STAND_OFFSET, type InstallationView } from './installation'
-import { createLamp, type LampView } from './lamp'
+import { paintingLight } from '../lamp/illumination'
+import { BEAM_COLORS, createLamp, type LampView } from './lamp'
 import { heldAim, heldPosition, type HeldPose } from '../lamp/lampActions'
 import type { GuideActor } from './roomBuilder'
 
@@ -18,6 +19,13 @@ export type RuntimeView = {
   dispose(): void
 }
 
+/** Картина зала: её материал не зависит от света, поэтому подсветку лампой рисуем через его цвет. */
+export type PaintingView = {
+  material: THREE.MeshBasicMaterial
+  position: { x: number; y: number; z: number }
+  rotation_y: number
+}
+
 export type RuntimeViewParts = {
   group: THREE.Object3D
   bounds: Room['bounds']
@@ -27,6 +35,8 @@ export type RuntimeViewParts = {
   ambient: THREE.HemisphereLight
   /** Основной направленный свет галереи: тонируется вместе с общим, иначе пол и стены почти не меняются. */
   sun?: THREE.DirectionalLight
+  /** Картины зала: без освещения лампой они чуть приглушены, под лучом светлеют и теплеют. */
+  paintings?: PaintingView[]
   guides: GuideActor[]
   /** Стены с текстурой штукатурки: цвет умножается на неё, поэтому акцент разбавляется белым. */
   textured: boolean
@@ -37,6 +47,14 @@ export type RuntimeViewParts = {
  * определяет, как выглядит зал, и тёплый или холодный зал должен читаться с первого взгляда.
  */
 const LIGHT_TINT: Record<SundayConfigLighting, string> = { neutral: '#ffffff', warm: '#ffb066', cool: '#8ab8ff' }
+/** Яркость картины без света лампы и под лучом (1 — как нарисована); картины ярче 1 не бывает, она уже на пределе. */
+const PAINTING_DIM = 0.72
+const PAINTING_LIT = 1
+/** Насколько цвет луча окрашивает картину под ним. */
+const PAINTING_TINT = 0.4
+/** Скорость сглаживания подсветки, 1/с: луч не должен «щёлкать» картину при повороте. */
+const PAINTING_EASE = 8
+
 /** Доля оттенка в цвете общего света: заметно, но картины не окрашиваются целиком (у них свой неосвещаемый материал). */
 const AMBIENT_TINT = 0.8
 /** Доля акцента в цвете стены с текстурой: иначе стены темнеют, а штукатурка пропадает. */
@@ -57,7 +75,12 @@ export function wallTint(accent: string, textured: boolean): THREE.Color {
 }
 
 export function createRuntimeView(parts: RuntimeViewParts): RuntimeView {
-  const { group, bounds, walls, ambient, guides, textured, sun } = parts
+  const { group, bounds, walls, ambient, guides, textured, sun, paintings = [] } = parts
+  const paintLevel = paintings.map(() => 0)
+  const paintColor = new THREE.Color()
+  const paintTint = new THREE.Color()
+  const paintTmp = new THREE.Color()
+  const paintBase = paintings.map((p) => p.material.color.clone())
   const baseSky = ambient.color.clone()
   const baseGround = ambient.groundColor.clone()
   const baseSun = sun?.color.clone()
@@ -167,6 +190,19 @@ export function createRuntimeView(parts: RuntimeViewParts): RuntimeView {
       if (lastRt) applyLamp(lastRt)
     },
     update(dtS) {
+      if (paintings.length && lastRt) {
+        const beam = lamp?.beam()
+        paintTint.set(BEAM_COLORS[lastRt.config.lighting])
+        paintings.forEach((p, i) => {
+          const target = beam ? paintingLight(beam, p) : 0
+          paintLevel[i] += (target - paintLevel[i]) * Math.min(1, dtS * PAINTING_EASE)
+          const level = paintLevel[i]
+          const base = PAINTING_DIM + (PAINTING_LIT - PAINTING_DIM) * level
+          // Цвет рисунка не трогаем: множитель яркости, слегка окрашенный лучом.
+          paintColor.setRGB(base, base, base).lerp(paintTmp.copy(paintTint).multiplyScalar(base), PAINTING_TINT * level)
+          p.material.color.copy(paintBase[i]).multiply(paintColor)
+        })
+      }
       if (markers.visible) {
         markerT += dtS
         markerMaterial.opacity = 0.55 + 0.3 * Math.sin(markerT * 4)

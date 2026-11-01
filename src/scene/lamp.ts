@@ -1,8 +1,15 @@
 import * as THREE from 'three'
+import type { Beam } from '../lamp/illumination'
 import type { SundayConfigLighting, SundayLamp } from '../network/sunday'
 
 /** Параметры SpotLight по api-sunday.md §2. */
+/** Интенсивность из api-sunday.md §2. */
 const SPOT_INTENSITY = 3
+/**
+ * Во сколько раз SpotLight усилен на клиенте: при 3 свет тонет в общем свете белой галереи и не виден ни на людях,
+ * ни на стенах. Серверу интенсивность не передаётся, это только вид.
+ */
+export const SPOT_GAIN = 3
 const SPOT_DISTANCE_M = 8
 const SPOT_ANGLE = Math.PI / 6
 const SPOT_PENUMBRA = 0.5
@@ -40,6 +47,8 @@ export type LampView = {
   /** Скрывает модель, оставляя свет (лампа в руке самого игрока). */
   setModelVisible(visible: boolean): void
   carry(position: { x: number; y: number; z: number }, yaw: number, headPitch?: number): void
+  /** Луч сейчас: из шарнира головки по направлению света; на нём считается подсветка картин. */
+  beam(): Beam
   dispose(): void
 }
 
@@ -124,7 +133,7 @@ export function createLamp(): LampView {
   // Пятно света на полу там, куда упирается луч: показывает, куда лампа светит, даже на ярком полу.
   const poolTexture = softDiscTexture()
   if (poolTexture) owned.push(poolTexture)
-  const poolMaterial = glow(0.8, poolTexture)
+  const poolMaterial = glow(0.5, poolTexture)
   const poolGeometry = own(new THREE.CircleGeometry(1, 32))
   poolGeometry.rotateX(-Math.PI / 2)
   const pool = new THREE.Mesh(poolGeometry, poolMaterial)
@@ -134,9 +143,13 @@ export function createLamp(): LampView {
 
   let on = true
   let modelVisible = true
+  let aimYaw = 0
+  let aimPitch = 0
 
   /** Ставит пятно: пересечение луча из головки с полом (y = 0) в мировых координатах, у `object` нет поворота. */
   function aimPool(yaw: number, headPitch: number) {
+    aimYaw = yaw
+    aimPitch = headPitch
     const d = lampDirection(yaw, headPitch)
     const headY = object.position.y + HEAD_Y
     const reach = d.y < -0.02 ? headY / -d.y : Infinity
@@ -166,7 +179,7 @@ export function createLamp(): LampView {
       beamMaterial.color.set(BEAM_COLORS[lighting])
       poolMaterial.color.set(BEAM_COLORS[lighting])
       // Свет не удаляем и не добавляем: смена числа источников пересобирает шейдеры всей сцены.
-      spot.intensity = lamp.on ? SPOT_INTENSITY : 0
+      spot.intensity = lamp.on ? SPOT_INTENSITY * SPOT_GAIN : 0
       bulb.emissiveIntensity = lamp.on ? 1 : 0.05
       beam.visible = modelVisible && on
       aimPool(lamp.yaw, lamp.head_pitch)
@@ -182,6 +195,14 @@ export function createLamp(): LampView {
       head.rotation.y = yaw
       head.rotation.x = -(BASE_TILT + headPitch)
       aimPool(yaw, headPitch)
+    },
+    beam() {
+      const d = lampDirection(aimYaw, aimPitch)
+      return {
+        origin: { x: object.position.x, y: object.position.y + HEAD_Y, z: object.position.z },
+        dir: { x: d.x, y: d.y, z: d.z },
+        on,
+      }
     },
     dispose() {
       owned.forEach((x) => x.dispose())

@@ -5,9 +5,9 @@ import * as THREE from 'three'
 import type { Room, Surface } from '../src/network/contract'
 import type { SundayRoomRuntime } from '../src/network/sunday'
 import { STAND_OFFSET, STAND_SIZE } from '../src/scene/installation'
-import { lampDirection, SPOT_COLORS } from '../src/scene/lamp'
+import { lampDirection, SPOT_COLORS, SPOT_GAIN } from '../src/scene/lamp'
 import { buildRoom } from '../src/scene/roomBuilder'
-import { lightingTint, wallTint } from '../src/scene/runtimeView'
+import { createRuntimeView, lightingTint, wallTint } from '../src/scene/runtimeView'
 
 const fixture: SundayRoomRuntime = JSON.parse(
   readFileSync(join(import.meta.dir, 'fixtures', 'sunday', 'world.runtime.json'), 'utf8'),
@@ -60,7 +60,7 @@ test('лампа появляется на слоте, SpotLight по §2, на�
   const slot = fixture.config.lamp_slots.find((s) => s.slot_id === fixture.lamp.slot_id)!
   expect(lamp.position.toArray()).toEqual([slot.position.x, slot.position.y, slot.position.z])
   const spot = lamp.getObjectByProperty('isSpotLight', true) as THREE.SpotLight
-  expect(spot.intensity).toBe(3)
+  expect(spot.intensity).toBe(3 * SPOT_GAIN) // 3 из §2, усилено на клиенте, чтобы свет был виден
   expect(spot.distance).toBe(8)
   expect(spot.angle).toBeCloseTo(Math.PI / 6)
   expect(spot.penumbra).toBe(0.5)
@@ -85,7 +85,7 @@ test('лампа: on=false гасит свет, не удаляя источни
       r.lamp.slot_id = 'b'
     }),
   )
-  expect(spot.intensity).toBe(3)
+  expect(spot.intensity).toBe(3 * SPOT_GAIN) // 3 из §2, усилено на клиенте, чтобы свет был виден
   expect(`#${spot.color.getHexString()}`.toUpperCase()).toBe(SPOT_COLORS.warm)
   expect(find(b, 'lamp_01')!.position.x).toBe(9)
   expect(b.group.children.filter((o) => o.name === 'lamp_01')).toHaveLength(1)
@@ -249,4 +249,35 @@ test('dispose зала убирает лампу и стенд, повторны
   b.dispose()
   expect(b.group.children).toHaveLength(0)
   expect(() => b.runtime.dispose()).not.toThrow()
+})
+
+test('картины: без света лампы приглушены, под лучом плавно светлеют; цвет рисунка не теряется', () => {
+  const material = new THREE.MeshBasicMaterial({ color: '#808080' })
+  const base = material.color.getHex()
+  const painting = { material, position: { x: 3, y: 1.8, z: 0 }, rotation_y: Math.PI / 2 } // лицом в +X
+  const b = buildRoom(room, new Map(), labelFn)
+  const view = createRuntimeView({
+    group: new THREE.Group(),
+    bounds: room.bounds,
+    walls: [],
+    ambient: new THREE.HemisphereLight(),
+    guides: [],
+    textured: false,
+    paintings: [painting],
+  })
+  b.dispose()
+  const first = (v: THREE.Color) => v.r
+  view.update(0.1)
+  expect(first(material.color)).toBe(new THREE.Color(base).r) // runtime ещё не пришёл: картина как есть
+  // слот (3,0,4) далеко от картины в этом тесте: стоит лампа, светящая мимо
+  view.apply(rt((r) => Object.assign(r.lamp, { yaw: Math.PI, head_pitch: 0 })))
+  for (let i = 0; i < 30; i++) view.update(0.1)
+  const dim = first(material.color)
+  expect(dim).toBeLessThan(new THREE.Color(base).r)
+  // лампа смотрит на картину: из слота (3, 0, 4) к (3, 1.8, 0) вдоль −Z, лицо картины — +X, поэтому поворачиваем картину
+  painting.rotation_y = 0
+  painting.position = { x: 3, y: 1.8, z: 0 }
+  view.apply(rt((r) => ((r.revision = 2), Object.assign(r.lamp, { yaw: 0, head_pitch: -Math.PI / 3 }))))
+  for (let i = 0; i < 30; i++) view.update(0.1)
+  expect(first(material.color)).toBeGreaterThan(dim)
 })

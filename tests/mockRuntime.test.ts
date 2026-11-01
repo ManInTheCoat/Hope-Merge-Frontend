@@ -25,7 +25,13 @@ test('world.runtime идёт сразу за snapshot и описывает те
   expect(rt.revision).toBe(1)
   expect(rt.config).toMatchObject({ accent_color: '#D9D2C3', lighting: 'neutral', npc_count: 10, installation_visible: false })
   expect(rt.config.lamp_slots.map((s: { slot_id: string }) => s.slot_id)).toEqual(['a', 'b'])
-  expect(rt.lamp).toEqual({ object_id: 'lamp_01', slot_id: 'a', holder_user_id: null, yaw: 0, head_pitch: 0, on: true })
+  // Лампа мока стоит перед картинами и по умолчанию светит на них, чуть вверх (у настоящего сервера углы нулевые).
+  expect(rt.lamp).toMatchObject({ object_id: 'lamp_01', slot_id: 'a', holder_user_id: null, yaw: 0, on: true })
+  expect(rt.lamp.head_pitch).toBeLessThan(-Math.PI / 4)
+  expect(rt.lamp.head_pitch).toBeGreaterThanOrEqual(-Math.PI / 3)
+  const [a, b] = rt.config.lamp_slots.map((s: { position: { x: number; z: number } }) => s.position)
+  expect(a.z).toBeCloseTo(b.z)
+  expect(Math.abs(a.x - b.x)).toBeGreaterThanOrEqual(2) // между местами не меньше метра до любого края
   expect(rt.guides.map((g: { guide_id: string }) => g.guide_id)).toEqual(['guide_leonardo'])
   expect(rt.config.guide_placements).toHaveLength(rt.guides.length)
 })
