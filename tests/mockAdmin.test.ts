@@ -172,3 +172,75 @@ test('клиенты: пусто без WS, одна строка после в�
   expect(clients).toHaveLength(1)
   expect(clients[0]).toMatchObject({ display_name: 'alice', stale: true, fps: null })
 })
+
+// --- HTTP-клиент админки поверх мока ---
+
+import {
+  fetchAdminClients,
+  fetchAdminGuide,
+  fetchAdminMe,
+  fetchAdminRoom,
+  fetchAdminRooms,
+  putAdminGuide,
+  putAdminRoom,
+} from '../src/network/adminApi'
+import { ApiError } from '../src/network/api'
+
+/** Подменяет глобальный fetch на мок на время теста. */
+async function withMockFetch<T>(fn: (h: Awaited<ReturnType<typeof setup>>) => Promise<T>): Promise<T> {
+  const s = await setup()
+  const real = globalThis.fetch
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => s.h.server.fetch(new URL(String(input), 'http://localhost').href, init)) as typeof fetch
+  try {
+    return await fn(s)
+  } finally {
+    globalThis.fetch = real
+  }
+}
+
+test('adminApi: fetchAdminMe — true только для администратора', async () => {
+  await withMockFetch(async ({ h }) => {
+    expect(await fetchAdminMe()).toBe(true)
+    await h.register('bob')
+    expect(await fetchAdminMe()).toBe(false) // 403
+    await h.http('POST', '/auth/logout')
+    expect(await fetchAdminMe()).toBe(false) // 401
+  })
+})
+
+test('adminApi: сеть недоступна — fetchAdminMe даёт false, а не исключение', async () => {
+  const real = globalThis.fetch
+  globalThis.fetch = (() => Promise.reject(new TypeError('Failed to fetch'))) as typeof fetch
+  try {
+    expect(await fetchAdminMe()).toBe(false)
+  } finally {
+    globalThis.fetch = real
+  }
+})
+
+test('adminApi: чтение залов, гидов и клиентов', async () => {
+  await withMockFetch(async ({ roomId, guideId }) => {
+    expect((await fetchAdminRooms()).some((r) => r.room_id === roomId)).toBe(true)
+    expect((await fetchAdminRoom(roomId)).room_id).toBe(roomId)
+    expect((await fetchAdminGuide(guideId)).guide_id).toBe(guideId)
+    expect(await fetchAdminClients()).toEqual([])
+  })
+})
+
+test('adminApi: PUT зала — успех и REVISION_CONFLICT как ApiError', async () => {
+  await withMockFetch(async ({ roomId, roomBody }) => {
+    const ok = await putAdminRoom(roomId, (await roomBody({ npc_count: 7 })) as never)
+    expect(ok.revision).toBe(2)
+    const stale = putAdminRoom(roomId, (await roomBody({ npc_count: 8 }, 1)) as never)
+    await expect(stale).rejects.toBeInstanceOf(ApiError)
+    await expect(stale).rejects.toMatchObject({ status: 409, code: 'REVISION_CONFLICT' })
+  })
+})
+
+test('adminApi: PUT гида возвращает AdminGuide с новой revision', async () => {
+  await withMockFetch(async ({ guideId, guideBody }) => {
+    const g = await putAdminGuide(guideId, (await guideBody({ topic: 'Другая тема' })) as never)
+    expect(g.revision).toBe(2)
+    expect(g.settings.topic).toBe('Другая тема')
+  })
+})
