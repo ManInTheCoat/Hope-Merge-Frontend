@@ -19,8 +19,8 @@ export class FirstPersonControls {
   /** false: клавиши и мышь игнорируются (загрузка, открытая карточка). */
   enabled = true
   onInteract: (() => void) | null = null
-  /** Клавиши настройки лампы (вкл/выкл, поворот, наклон): нажатие без повтора. */
-  onLampKey: ((code: string) => void) | null = null
+  /** Клавиши настройки лампы (вкл/выкл, поворот, наклон); при удержании приходят повторы. */
+  onLampKey: ((code: string, repeat: boolean) => void) | null = null
 
   private readonly el: HTMLElement
   private readonly onLockChange: (locked: boolean) => void
@@ -48,7 +48,7 @@ export class FirstPersonControls {
         return
       }
       if (LAMP_KEYS.has(e.code)) {
-        if (!e.repeat) this.onLampKey?.(e.code)
+        this.onLampKey?.(e.code, e.repeat)
         return
       }
       this.keys.onKeyDown(e.code)

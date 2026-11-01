@@ -11,7 +11,9 @@ export type RuntimeView = {
   /** Применяет полный снимок: идемпотентно, лишнего не пересоздаёт. */
   apply(runtime: SundayRoomRuntime): void
   /** Где сейчас держащий лампу (каждый кадр); null — его нет в зале, лампа скрыта. Без держателя не действует. */
-  setHolderPose(pose: HeldPose | null): void
+  setHolderPose(pose: HeldPose | null, own?: boolean): void
+  /** Ещё не отправленный поворот головки: показываем сразу, не дожидаясь ответа сервера. null — убрать. */
+  setLampPreview(aim: { yaw: number; head_pitch: number } | null): void
   update(dtS: number): void
   dispose(): void
 }
@@ -54,11 +56,30 @@ export function createRuntimeView(parts: RuntimeViewParts): RuntimeView {
   const guideSeen = new Map<string, string>()
   let held = false
   let heldPose: HeldPose | null = null
+  let ownHeld = false
+  let preview: { yaw: number; head_pitch: number } | null = null
+  let lastRt: SundayRoomRuntime | null = null
+
+  function applyLamp(rt: SundayRoomRuntime) {
+    const slot = rt.config.lamp_slots.find((s) => s.slot_id === rt.lamp.slot_id)
+    if (!slot) return
+    if (!lamp) {
+      lamp = createLamp()
+      group.add(lamp.object)
+    }
+    lamp.apply(preview && rt.lamp.holder_user_id === null ? { ...rt.lamp, ...preview } : rt.lamp, slot.position, rt.config.lighting)
+    held = rt.lamp.holder_user_id !== null
+    lamp.object.visible = true
+    placeHeld()
+  }
 
   /** Лампа в руках стоит у игрока, иначе на своём слоте (его положение apply() уже задал). */
   function placeHeld() {
-    if (!lamp || !held) return
+    if (!lamp) return
+    if (!held) return lamp.setModelVisible(true)
     lamp.object.visible = heldPose !== null
+    // Свою лампу игрок видит в руке (оверлей): в мире остаётся только её свет.
+    lamp.setModelVisible(!ownHeld)
     if (heldPose) lamp.carry(heldPosition(heldPose), heldPose.yaw)
   }
 
@@ -90,21 +111,17 @@ export function createRuntimeView(parts: RuntimeViewParts): RuntimeView {
       }
       if (stand) stand.object.visible = config.installation_visible
 
-      const slot = config.lamp_slots.find((s) => s.slot_id === rt.lamp.slot_id)
-      if (slot) {
-        if (!lamp) {
-          lamp = createLamp()
-          group.add(lamp.object)
-        }
-        lamp.apply(rt.lamp, slot.position, config.lighting)
-        held = rt.lamp.holder_user_id !== null
-        lamp.object.visible = true
-        placeHeld()
-      }
+      lastRt = rt
+      applyLamp(rt)
     },
-    setHolderPose(pose) {
+    setHolderPose(pose, own = false) {
       heldPose = pose
+      ownHeld = own
       placeHeld()
+    },
+    setLampPreview(aim) {
+      preview = aim
+      if (lastRt) applyLamp(lastRt)
     },
     update(dtS) {
       if (stand?.object.visible) stand.update(dtS)

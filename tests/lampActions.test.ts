@@ -43,6 +43,16 @@ test('стоящая лампа в прицеле — цель «лампа»; �
   expect(pickLamp(look(9, 6), withLamp({ holder_user_id: 'usr_01' }), 'usr_01')?.target).toEqual({ kind: 'slot', slotId: 'b' })
 })
 
+test('слот под лампу в руках выбирается по направлению взгляда, даже если луч идёт выше цилиндра', () => {
+  const held = withLamp({ holder_user_id: 'usr_01' })
+  // почти горизонтальный взгляд на слот a с 2 м и с отклонением 25° вбок
+  expect(pickLamp(look(3, 6, 0.47, 0, -1), held, 'usr_01')?.target).toEqual({ kind: 'slot', slotId: 'a' })
+  // отвернулись от обоих слотов
+  expect(pickLamp(look(3, 6, 0, 0, 1), held, 'usr_01')).toBeNull()
+  // стоит над слотом — подходит при любом повороте
+  expect(pickLamp(look(3, 4.3, 0, 0, 1), held, 'usr_01')?.target).toEqual({ kind: 'slot', slotId: 'a' })
+})
+
 test('чужая лампа в руках не цель; мимо и далеко — null', () => {
   expect(pickLamp(look(3, 6), withLamp({ holder_user_id: 'usr_02' }), 'usr_01')).toBeNull()
   expect(pickLamp(look(3, 6, 1, -0.4, 0), fixture, 'usr_01')).toBeNull() // взгляд в сторону

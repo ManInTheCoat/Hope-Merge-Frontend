@@ -101,6 +101,11 @@ export function cylinderHitT(
   return t
 }
 
+/** Отрезок от глаз до точки не проходит сквозь блок. */
+export function sightClear(input: LookInput, point: Vec3): boolean {
+  return !input.colliders?.some((box) => segmentHitsBox(input.eye, point, box))
+}
+
 const guideHitT = (input: LookInput, g: Guide, hintRadiusM: number) =>
   cylinderHitT(input, g.position, GUIDE_HIT_RADIUS_M, GUIDE_HIT_HEIGHT_M, GUIDE_EYE_HEIGHT_M, hintRadiusM)
 

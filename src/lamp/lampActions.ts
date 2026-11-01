@@ -2,15 +2,19 @@ import type { ErrorBody } from '../network/contract'
 import type { SundayLamp, SundayObjectAct, SundayRoomRuntime } from '../network/sunday'
 import { rateLimitText, userErrorText } from '../ui/errorText'
 import { wrapAngle } from '../scene/angles'
-import { cylinderHitT, type LookInput } from '../scene/targeting'
+import { cylinderHitT, sightClear, type LookInput } from '../scene/targeting'
 
 /** Что игрок видит в прицеле: стоящая лампа или место (слот), куда можно поставить лампу из рук. */
 export type LampTarget = { kind: 'lamp' } | { kind: 'slot'; slotId: 'a' | 'b' }
 
 /** Подсказку показываем с запасом: сервер проверяет ≤ 3 м по своей, чуть отстающей позиции (api-sunday.md §4). */
 export const LAMP_HINT_RADIUS_M = 2.8
-const LAMP_HIT_RADIUS_M = 0.4
-const LAMP_HIT_HEIGHT_M = 1.2
+const LAMP_HIT_RADIUS_M = 0.55
+const LAMP_HIT_HEIGHT_M = 1.6
+/** Слот под лампу в руках выбирается по направлению взгляда, а не по точному попаданию в пол. */
+const SLOT_VIEW_ANGLE = (40 * Math.PI) / 180
+/** Ближе этого слот выбирается при любом повороте: игрок стоит над ним. */
+const SLOT_NEAR_M = 0.7
 /** Сервер проверяет видимость точки на этой высоте над слотом. */
 const LAMP_EYE_HEIGHT_M = 0.6
 
@@ -36,12 +40,21 @@ export function pickLamp(input: LookInput, rt: SundayRoomRuntime, userId: string
     return t === null ? null : { target: { kind: 'lamp' }, t }
   }
   if (lamp.holder_user_id !== userId) return null
-  let best: { target: LampTarget; t: number } | null = null
+  const from = input.rangeFrom ?? input.eye
+  const viewLen = Math.hypot(input.dir.x, input.dir.z)
+  let best: { target: LampTarget; t: number; angle: number } | null = null
   for (const slot of rt.config.lamp_slots) {
-    const t = cylinderHitT(input, slot.position, LAMP_HIT_RADIUS_M, LAMP_HIT_HEIGHT_M, LAMP_EYE_HEIGHT_M, LAMP_HINT_RADIUS_M)
-    if (t !== null && (!best || t < best.t)) best = { target: { kind: 'slot', slotId: slot.slot_id }, t }
+    const dx = slot.position.x - from.x
+    const dz = slot.position.z - from.z
+    const dist = Math.hypot(dx, dz)
+    if (dist > LAMP_HINT_RADIUS_M) continue
+    // Угол между взглядом и направлением на слот в плоскости пола.
+    const angle = dist < 1e-6 || viewLen < 1e-6 ? 0 : Math.acos(Math.max(-1, Math.min(1, (dx * input.dir.x + dz * input.dir.z) / (dist * viewLen))))
+    if (dist > SLOT_NEAR_M && angle > SLOT_VIEW_ANGLE) continue
+    if (!sightClear(input, { x: slot.position.x, y: LAMP_EYE_HEIGHT_M, z: slot.position.z })) continue
+    if (!best || angle < best.angle) best = { target: { kind: 'slot', slotId: slot.slot_id }, t: dist, angle }
   }
-  return best
+  return best && { target: best.target, t: best.t }
 }
 
 export const HELD_HINT = 'Лампа в руках: подойдите к месту и нажмите E, чтобы поставить'
