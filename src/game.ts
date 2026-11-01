@@ -586,7 +586,6 @@ export async function startGame(host: HTMLElement): Promise<void> {
     s.guides = loaded.room.guides
     s.doors = loaded.room.doors
     scene.add(s.built.group)
-    s.crowd?.dispose()
     s.crowd = createCrowd(s.built.group)
     applyRuntime(s)
     applyNpc(s)

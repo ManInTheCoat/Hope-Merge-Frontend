@@ -14,8 +14,14 @@ const META_KEEP = 8
 /** Буферы интерполяции всех NPC зала. Снимок — полный список: отсутствующие ID удаляются. */
 export class NpcBuffers {
   private entries = new Map<string, Entry>()
+  private instance: string | undefined
 
-  apply(npcs: SundayNPC[], nowMs: number): void {
+  /** Новая `room_instance_id` — новая симуляция: прежние траектории не продолжаются, позиции ставятся сразу. */
+  apply(npcs: SundayNPC[], nowMs: number, instanceId?: string): void {
+    if (instanceId !== this.instance) {
+      this.entries.clear()
+      this.instance = instanceId
+    }
     const seen = new Set<string>()
     for (const n of npcs) {
       seen.add(n.npc_id)
@@ -47,5 +53,6 @@ export class NpcBuffers {
 
   clear(): void {
     this.entries.clear()
+    this.instance = undefined
   }
 }

@@ -122,7 +122,7 @@ export class NpcSim {
     for (const w of this.walkers) {
       const m = w.mode
       if (m.kind === 'away') {
-        if (this.clock >= m.until) this.returnThroughDoor(w)
+        if (this.clock >= m.until) this.choose(w) // вернулся: появляется у двери, где вошёл, и идёт по следующему делу
         continue
       }
       const talk = w.talk && w.talk.until > nowMs ? w.talk : null
@@ -286,10 +286,6 @@ export class NpcSim {
     if (m.face) w.yaw = yawTo(w.pos, m.face)
   }
 
-  /** Возвращение из-за двери: появляется там же, где вошёл, и идёт по следующему делу. */
-  private returnThroughDoor(w: Walker): void {
-    this.choose(w)
-  }
 }
 
 /** Точки сетки, пригодные для стояния (стартовые позиции посетителей). */

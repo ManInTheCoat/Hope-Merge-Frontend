@@ -81,4 +81,19 @@ describe('NpcBuffers', () => {
     expect(ps.map((p) => p.id)).toEqual(['npc_01', 'npc_02'])
     expect(ps[0]).toMatchObject({ state: 'idle', speed_mps: 0, phase: 2 })
   })
+
+  test('новая room_instance_id сбрасывает буферы: позиция ставится сразу, без скольжения', () => {
+    const b = new NpcBuffers()
+    b.apply([npc('npc_00', 0, 0)], 1000, 'inst-1')
+    b.apply([npc('npc_00', 1, 0)], 1200, 'inst-2')
+    const [p] = b.sample(1300) // без сброса было бы 0.5
+    expect(p.x).toBe(1)
+  })
+
+  test('та же instance интерполируется как раньше', () => {
+    const b = new NpcBuffers()
+    b.apply([npc('npc_00', 0, 0)], 1000, 'inst-1')
+    b.apply([npc('npc_00', 1, 0)], 1200, 'inst-1')
+    expect(b.sample(1300)[0].x).toBeCloseTo(0.5, 5)
+  })
 })

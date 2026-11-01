@@ -51,6 +51,7 @@ export function createCrowd(parent: THREE.Object3D, maxCount = NPC_MAX): Crowd {
   const buffers = new NpcBuffers()
   /** Накопленная фаза шага по NPC: стартует с `phase` из снимка, дальше растёт с пройденным путём. */
   const stride = new Map<string, number>()
+  let instance: string | null = null
 
   const body = new THREE.Matrix4()
   const local = new THREE.Matrix4()
@@ -73,7 +74,10 @@ export function createCrowd(parent: THREE.Object3D, maxCount = NPC_MAX): Crowd {
 
   return {
     apply(state, nowMs) {
-      buffers.apply(state.npcs.slice(0, maxCount), nowMs)
+      // Новая симуляция: фаза шага начинается заново с `phase` из снимка.
+      if (state.room_instance_id !== instance) stride.clear()
+      instance = state.room_instance_id
+      buffers.apply(state.npcs.slice(0, maxCount), nowMs, instance)
     },
 
     update(dtS, nowMs, player) {
