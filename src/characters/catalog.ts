@@ -14,25 +14,29 @@ export function pickModel(key: string): string {
   return MODEL_IDS[(h >>> 0) % MODEL_IDS.length]
 }
 
-export type Accessory = 'boater' | 'straw-wide' | 'beret' | 'beard-white' | 'beard-grey' | 'beard-red'
+export type Accessory = 'boater' | 'straw-wide' | 'beret'
 
-export type GuideLook = { model: string; outfit: string; accessories: Accessory[]; accent: string }
+/** `outfit` тонирует одежду (умножается на палитру модели), null — родные цвета. */
+export type GuideLook = { model: string; outfit: string | null; accessories: Accessory[]; accent: string }
 
 const LOOKS: { ids: string[]; names: string[]; look: GuideLook }[] = [
   {
     ids: ['guide_monet'],
     names: ['моне'],
-    look: { model: 'character-male-c', outfit: '#e9e4d4', accessories: ['boater', 'beard-white'], accent: '#5f9ea0' },
+    // Своя борода у модели male-b; канотье поверх лысины.
+    look: { model: 'character-male-b', outfit: null, accessories: ['boater'], accent: '#5f9ea0' },
   },
   {
     ids: ['guide_da_vinci', 'guide_leonardo'],
     names: ['леонардо', 'винчи'],
-    look: { model: 'character-male-e', outfit: '#8a3b2a', accessories: ['beret', 'beard-grey'], accent: '#b8863b' },
+    // Та же бородатая модель, но тёмный берет и красно-коричневая одежда.
+    look: { model: 'character-male-b', outfit: '#a0522d', accessories: ['beret'], accent: '#b8863b' },
   },
   {
     ids: ['guide_van_gogh'],
     names: ['ван гог'],
-    look: { model: 'character-male-b', outfit: '#2f4f8f', accessories: ['straw-wide', 'beard-red'], accent: '#e0b020' },
+    // Рыжие волосы модели male-d и соломенная шляпа.
+    look: { model: 'character-male-d', outfit: null, accessories: ['straw-wide'], accent: '#e0b020' },
   },
 ]
 
@@ -46,8 +50,11 @@ export function guideLook(id: string, displayName: string): GuideLook | null {
 
 export type Clip = 'idle' | 'walk' | 'sprint'
 
-/** Клип по скорости, м/с. Скорость выше человеческой — телепорт сервера, а не бег. */
+/**
+ * Клип по скорости, м/с. Обычный шаг клиента — 3,6 м/с (90% от 4), это ходьба; бег — только выше
+ * максимума сервера. Скорость выше человеческой — телепорт сервера, а не бег.
+ */
 export function clipForSpeed(mps: number): Clip {
   if (mps < 0.3 || mps > 6) return 'idle'
-  return mps < 2.6 ? 'walk' : 'sprint'
+  return mps <= 4.2 ? 'walk' : 'sprint'
 }

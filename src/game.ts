@@ -55,7 +55,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
   const renderer = new THREE.WebGLRenderer({ antialias: true })
   // Чёткость подстраивается под машину: показ идёт на чужом, возможно слабом компьютере.
   const quality = new QualityGovernor({
-    min: 0.6,
+    min: Math.min(0.6, window.devicePixelRatio),
     max: Math.min(window.devicePixelRatio, 1.5),
     step: 0.15,
     lowFps: 45,
@@ -103,7 +103,8 @@ export async function startGame(host: HTMLElement): Promise<void> {
   const view = new RemotePlayersView(scene)
   /** Модели персонажей грузятся параллельно со входом; до загрузки (или при ошибке) — капсулы. */
   let characters: CharacterLibrary | null = null
-  CharacterLibrary.load().then(
+  /** Зал строится только после этой загрузки, иначе гиды первого зала остались бы капсулами. Не отклоняется. */
+  const charactersReady = CharacterLibrary.load().then(
     (lib) => {
       characters = lib
       view.setLibrary(lib)
@@ -623,6 +624,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
     const slow = setTimeout(() => hud.fadeText(`Переход: ${door.label}…`), FADE_TEXT_DELAY_MS)
     try {
       const loaded = await manager.load(current_room, s.ac.signal)
+      await charactersReady
       if (!alive()) return
       showRoom(s, loaded)
       await socket.request('world.ready', { world_version: manifest.world_version, movement_epoch: s.epoch }, 'world.ready')
@@ -748,6 +750,8 @@ export async function startGame(host: HTMLElement): Promise<void> {
 
       rooms = makeRooms(snapshot.world_version, s.budget)
       const loaded = await rooms.load(snapshot.current_room, s.ac.signal)
+      await charactersReady
+      s.ac.signal.throwIfAborted()
       showRoom(s, loaded)
       if (!old && returningEntry) hud.showLoading({ kind: 'loading', text: `Возвращаемся в зал «${loaded.room.title}»…` })
       applySelf(s, snapshot.self, controls)

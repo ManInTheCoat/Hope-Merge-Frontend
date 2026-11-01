@@ -24,13 +24,13 @@ export function createGuideActor(library: CharacterLibrary): GuideFactory {
     const look = guideLook(g.id, g.display_name)
     const figure = library.create(look?.model ?? pickModel(g.id))
     if (look) {
-      figure.tintBody(look.outfit)
+      if (look.outfit) figure.tintBody(look.outfit)
       const head = figure.head
       const headMesh = figure.root.getObjectByName('head-mesh') as THREE.Mesh | undefined
       if (head && headMesh) {
         headMesh.geometry.computeBoundingBox()
         const bb = headMesh.geometry.boundingBox!
-        for (const kind of look.accessories) head.add(buildAccessory(kind, bb.max.y - HEAD_BONE_Y, bb.min.y - HEAD_BONE_Y, bb.max.z))
+        for (const kind of look.accessories) head.add(buildAccessory(kind, bb.max.y - HEAD_BONE_Y))
       }
     }
     const object = new THREE.Group()

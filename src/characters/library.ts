@@ -70,6 +70,10 @@ export class Figure {
   dispose(): void {
     this.mixer.stopAllAction()
     this.mixer.uncacheRoot(this.mixer.getRoot())
+    // У клона свои скелеты; рендерер держит для каждого текстуру костей, пока не вызван dispose().
+    this.root.traverse((o) => {
+      if ((o as THREE.SkinnedMesh).isSkinnedMesh) (o as THREE.SkinnedMesh).skeleton.dispose()
+    })
     this.ownMaterial?.dispose()
     this.root.removeFromParent()
   }

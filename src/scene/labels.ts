@@ -25,7 +25,7 @@ export function makeLabel(text: string, widthM: number, accent?: string): THREE.
   })
   const mesh = new THREE.Mesh(
     new THREE.PlaneGeometry(widthM, widthM / 4),
-    new THREE.MeshBasicMaterial({ map: texture, transparent: true }),
+    new THREE.MeshBasicMaterial({ map: texture, transparent: true, toneMapped: false }),
   )
   return mesh
 }
@@ -59,6 +59,6 @@ export function makeGuideLabel(name: string, subtitle: string, widthM: number, a
   })
   return new THREE.Mesh(
     new THREE.PlaneGeometry(widthM, (widthM * H) / W),
-    new THREE.MeshBasicMaterial({ map: texture, transparent: true }),
+    new THREE.MeshBasicMaterial({ map: texture, transparent: true, toneMapped: false }),
   )
 }
