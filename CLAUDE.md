@@ -2,12 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Браузерный клиент многопользовательской виртуальной галереи (хакатон): Three.js + TypeScript + Vite, HTML-интерфейс поверх canvas. Бэкенд на Go — отдельный репозиторий https://github.com/MrDuckVC/hakaton-gallery-HoopAndMerge.
+Браузерный клиент многопользовательской виртуальной галереи (хакатон): Three.js + TypeScript + Vite, HTML-интерфейс поверх canvas. Бэкенд на Go — отдельный репозиторий https://github.com/MrDuckVC/hakaton-gallery-HopeAndMerge.
 
 ## Источники истины
 
 - `api.md` — нормативный контракт API v1 (HTTP `/api/v1`, один WebSocket `/api/v1/ws`). Он главнее `frontend-plan.md` и любых других документов: при расхождении прав `api.md`. Коды закрытия WS, лимиты, бюджет кеша, правила движения — оттуда.
 - `frontend-plan.md` — план работ по дням и технические решения по бюджету 10%.
+- `api-sunday.md` — расширение Sunday v1 (админка, FPS/ping, лампа, NPC, `guide.action`), нормативная часть `api.md`; fixtures — `tests/fixtures/sunday/`. Копии из бэкенда (ветка `issue-1`, `docs/api/`).
 - Типы контракта в коде — `src/network/contract.ts` (зеркало `api.md`).
 
 ## Команды
