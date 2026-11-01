@@ -10,6 +10,8 @@ import { downloadBlob, LastPhoto } from './photo/lastPhoto'
 import { photoErrorText, savePhoto, type Shot } from './photo/save'
 import { PlayerRegistry } from './players/registry'
 import { RemotePlayersView } from './players/view'
+import { CharacterLibrary } from './characters/library'
+import { createGuideActor } from './characters/guideFigure'
 import { activeColliders, moveCylinder } from './scene/collision'
 import { FirstPersonControls, typingInField } from './scene/controls'
 import { CLIENT_SPEED_FACTOR, moveSendBudget, moveVector, shouldSendMove } from './scene/input'
@@ -80,6 +82,15 @@ export async function startGame(host: HTMLElement): Promise<void> {
   let doorTarget: Door | null = null
 
   const view = new RemotePlayersView(scene)
+  /** Модели персонажей грузятся параллельно со входом; до загрузки (или при ошибке) — капсулы. */
+  let characters: CharacterLibrary | null = null
+  CharacterLibrary.load().then(
+    (lib) => {
+      characters = lib
+      view.setLibrary(lib)
+    },
+    (err) => console.warn('Модели персонажей не загрузились', err),
+  )
 
   const controls = new FirstPersonControls(renderer.domElement, (locked) => {
     const s = session
@@ -186,6 +197,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
   function openGuide(s: Session, guide: Guide) {
     sendMove(s, true) // серверная позиция должна быть свежей, иначе у границы 3 м придёт OUT_OF_RANGE
     hud.showHint(null)
+    s.built?.guides.find((a) => a.id === guide.id)?.greet()
     controls.enabled = false
     controls.keys.clear()
     hud.showClickOverlay(false)
@@ -515,7 +527,9 @@ export async function startGame(host: HTMLElement): Promise<void> {
   }
 
   function showRoom(s: Session, loaded: LoadedRoom) {
-    s.built = buildRoom(loaded.room, loaded.bitmaps)
+    s.built = buildRoom(loaded.room, loaded.bitmaps, undefined, {
+      guideFactory: characters ? createGuideActor(characters) : undefined,
+    })
     s.moveWorld = {
       colliders: activeColliders(s.built.colliders, s.manifest?.movement.player_height_m ?? 1.8),
       bounds: s.built.bounds,
@@ -821,7 +835,9 @@ export async function startGame(host: HTMLElement): Promise<void> {
       }
       if (s.roomId) view.update(s.players, s.roomId, now, camera)
       // Табличка — дочерний узел повёрнутой фигуры гида: мировой поворот к камере задаём через родителя.
-      for (const label of s.built.guideLabels) {
+      for (const actor of s.built.guides) {
+        actor.update(dt, s.path.sent)
+        const label = actor.label
         label.parent!.getWorldQuaternion(labelParentQ)
         label.quaternion.copy(labelParentQ.invert().multiply(camera.quaternion))
       }

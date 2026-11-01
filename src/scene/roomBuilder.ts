@@ -7,13 +7,44 @@ export type BuiltRoom = {
   group: THREE.Group
   colliders: Aabb[]
   bounds: Bounds2
-  /** Таблички с именами гидов: каждый кадр поворачиваются к камере, чтобы имя читалось с любой стороны. */
-  guideLabels: THREE.Object3D[]
+  /** Гиды зала: каждый кадр поворачиваются к игроку, их таблички — к камере. */
+  guides: GuideActor[]
   /** Освобождает геометрии, материалы и текстуры. Битмапы закрывает RoomManager.unload(). */
   dispose(): void
 }
 
 type LabelFn = (text: string, widthM: number) => THREE.Object3D
+
+/** Фигурка гида в зале. Табличка — дочерний узел `object`. */
+export type GuideActor = {
+  id: string
+  object: THREE.Object3D
+  label: THREE.Object3D
+  /** `player` — позиция игрока на полу или null, если её нет. */
+  update(dtS: number, player: { x: number; z: number } | null): void
+  /** Кивок при начале разговора. */
+  greet(): void
+  dispose(): void
+}
+
+export type GuideFactory = (g: Room['guides'][number], labelFn: LabelFn) => GuideActor
+
+export type BuildOptions = { guideFactory?: GuideFactory }
+
+/** Простая фигурка гида (капсула и голова): для тестов и пока модели не загрузились. */
+function capsuleGuide(g: Room['guides'][number], labelFn: LabelFn): GuideActor {
+  const figure = new THREE.Group()
+  figure.position.set(g.position.x, g.position.y, g.position.z)
+  figure.rotation.y = g.rotation_y
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.28, 0.9, 4, 12), new THREE.MeshStandardMaterial({ color: '#3f6f8f' }))
+  body.position.y = 0.73
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.2, 16, 12), new THREE.MeshStandardMaterial({ color: '#e8c9a6' }))
+  head.position.y = 1.55
+  const label = labelFn(g.display_name, 1.2)
+  label.position.y = 2.0
+  figure.add(body, head, label)
+  return { id: g.id, object: figure, label, update() {}, greet() {}, dispose() {} }
+}
 
 const DOOR_WIDTH = 1.2
 const DOOR_HEIGHT = 2.2
@@ -46,7 +77,12 @@ function doorPlacement(x: number, z: number, colliders: Aabb[], center: Vec2): {
   return { point: { x, z }, normal: { x: dx / len, z: dz / len } }
 }
 
-export function buildRoom(room: Room, bitmaps: Map<string, ImageBitmap>, labelFn: LabelFn = makeLabel): BuiltRoom {
+export function buildRoom(
+  room: Room,
+  bitmaps: Map<string, ImageBitmap>,
+  labelFn: LabelFn = makeLabel,
+  opts: BuildOptions = {},
+): BuiltRoom {
   const group = new THREE.Group()
   group.name = room.id
 
@@ -111,30 +147,21 @@ export function buildRoom(room: Room, bitmaps: Map<string, ImageBitmap>, labelFn
     group.add(door)
   }
 
-  const guideLabels: THREE.Object3D[] = []
+  const guides: GuideActor[] = []
   for (const g of room.guides) {
-    const figure = new THREE.Group()
-    figure.userData = { kind: 'guide', id: g.id }
-    figure.position.set(g.position.x, g.position.y, g.position.z)
-    figure.rotation.y = g.rotation_y
-
-    const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.28, 0.9, 4, 12), new THREE.MeshStandardMaterial({ color: '#3f6f8f' }))
-    body.position.y = 0.73
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.2, 16, 12), new THREE.MeshStandardMaterial({ color: '#e8c9a6' }))
-    head.position.y = 1.55
-    const label = labelFn(g.display_name, 1.2)
-    label.position.y = 2.0
-    guideLabels.push(label)
-    figure.add(body, head, label)
-    group.add(figure)
+    const actor = (opts.guideFactory ?? capsuleGuide)(g, labelFn)
+    actor.object.userData = { kind: 'guide', id: g.id }
+    guides.push(actor)
+    group.add(actor.object)
   }
 
   return {
     group,
     colliders,
     bounds: { minX: room.bounds.min.x, maxX: room.bounds.max.x, minZ: room.bounds.min.z, maxZ: room.bounds.max.z },
-    guideLabels,
+    guides,
     dispose() {
+      for (const a of guides) a.dispose()
       group.traverse((o) => {
         const mesh = o as THREE.Mesh
         if (!mesh.isMesh) return
