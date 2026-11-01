@@ -127,6 +127,19 @@ test('кольца мест для лампы видны, только пока 
   expect(markers().visible).toBe(false)
 })
 
+test('лампа: пятно света на полу там, куда светит; выключенная — без луча и пятна', () => {
+  const b = built()
+  b.runtime.apply(rt((r) => Object.assign(r.lamp, { yaw: 0, head_pitch: 0 })))
+  const lamp = find(b, 'lamp_01')!
+  const pool = lamp.children[lamp.children.length - 1]
+  expect(pool.visible).toBe(true)
+  // слот (3, 0, 4), шарнир на 1,1 м, луч вниз под π/4: пятно в 1,1 м впереди по −Z
+  expect(pool.position.x).toBeCloseTo(0)
+  expect(pool.position.z).toBeCloseTo(-1.1, 1)
+  b.runtime.apply(rt((r) => ((r.revision = 2), Object.assign(r.lamp, { on: false }))))
+  expect(pool.visible).toBe(false)
+})
+
 test('лампа в руках игрока на слоте не рисуется', () => {
   const b = built()
   b.runtime.apply(rt((r) => (r.lamp.holder_user_id = 'user_1')))
@@ -189,6 +202,9 @@ test('accent_color красит стены, lighting — оттенок обще
   expect(hemi.color.getHex()).toBe(lightingTint('cool').getHex())
   expect(lightingTint('neutral').getHex()).toBe(0xffffff)
   expect(lightingTint('warm').b).toBeLessThan(lightingTint('warm').r)
+  // Разница должна быть явной: заметный перекос каналов, а не пара процентов.
+  expect(lightingTint('warm').r - lightingTint('warm').b).toBeGreaterThan(0.25)
+  expect(lightingTint('cool').b - lightingTint('cool').r).toBeGreaterThan(0.2)
 })
 
 test('wallTint: с текстурой акцент разбавлен белым, неверный цвет — белый', () => {

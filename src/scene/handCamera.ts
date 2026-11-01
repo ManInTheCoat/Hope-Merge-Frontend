@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { canvasTexture } from './canvasTexture'
+import { createShadeGeometry } from './lamp'
 import { HAND_BASE, handPose } from './handPose'
 
 /** Лампа в левой руке относительно камеры игрока (м). */
@@ -245,15 +246,14 @@ export class HandCamera {
     handle.position.set(0, -0.06, 0.05)
     handle.rotation.x = -0.35
     const shade = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.06, 0.036, 0.1, 24, 1, true),
+      createShadeGeometry(0.036, 0.062, 0.1),
       new THREE.MeshStandardMaterial({ color: '#3a3a3f', roughness: 0.45, metalness: 0.5, side: THREE.DoubleSide }),
     )
-    shade.rotation.x = -Math.PI / 2
     shade.position.set(0, 0.02, -0.04)
     this.lampBulb = new THREE.MeshStandardMaterial({ color: '#fff3d6', emissive: '#fff3d6', emissiveIntensity: 1 })
     const lampLens = new THREE.Mesh(new THREE.CircleGeometry(0.056, 24), this.lampBulb)
     lampLens.rotation.y = Math.PI
-    lampLens.position.set(0, 0.02, -0.09)
+    lampLens.position.set(0, 0.02, -0.07)
     this.lampModel.add(handle, shade, lampLens)
     this.lampModel.rotation.x = -0.25
     this.lampModel.scale.setScalar(0.65)

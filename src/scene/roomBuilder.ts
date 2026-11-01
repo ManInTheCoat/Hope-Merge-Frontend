@@ -155,11 +155,12 @@ export function buildRoom(
 
   const look = opts.look
   let ambient: THREE.HemisphereLight
+  let sun: THREE.DirectionalLight | undefined
   if (look) {
     // Мягкий общий свет плюс один направленный: без теней, дёшево на встроенной графике.
     ambient = new THREE.HemisphereLight(0xffffff, 0xd9d4ca, 0.8)
     group.add(ambient)
-    const sun = new THREE.DirectionalLight(0xfff6ea, 1.3)
+    sun = new THREE.DirectionalLight(0xfff6ea, 1.3)
     sun.position.set(3, 8, 5)
     group.add(sun)
   } else {
@@ -249,7 +250,7 @@ export function buildRoom(
     group.add(actor.object)
   }
 
-  const runtime = createRuntimeView({ group, bounds: room.bounds, walls, ambient, guides, textured: !!look })
+  const runtime = createRuntimeView({ group, bounds: room.bounds, walls, ambient, sun, guides, textured: !!look })
 
   return {
     group,

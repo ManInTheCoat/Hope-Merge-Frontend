@@ -2,8 +2,8 @@ import * as THREE from 'three'
 import type { Room } from '../network/contract'
 import type { SundayConfigLighting, SundayRoomRuntime } from '../network/sunday'
 import { createInstallation, STAND_OFFSET, type InstallationView } from './installation'
-import { createLamp, SPOT_COLORS, type LampView } from './lamp'
-import { heldPosition, type HeldPose } from '../lamp/lampActions'
+import { createLamp, type LampView } from './lamp'
+import { heldAim, heldPosition, type HeldPose } from '../lamp/lampActions'
 import type { GuideActor } from './roomBuilder'
 
 /** Живое состояние зала по `world.runtime`: отделка, свет, гиды, стенд и лампа. Принадлежит построенному залу. */
@@ -25,18 +25,25 @@ export type RuntimeViewParts = {
   walls: THREE.Mesh[]
   /** Общий свет, чей оттенок задаёт `lighting`. */
   ambient: THREE.HemisphereLight
+  /** Основной направленный свет галереи: тонируется вместе с общим, иначе пол и стены почти не меняются. */
+  sun?: THREE.DirectionalLight
   guides: GuideActor[]
   /** Стены с текстурой штукатурки: цвет умножается на неё, поэтому акцент разбавляется белым. */
   textured: boolean
 }
 
-/** Доля оттенка `lighting` в цвете общего света: заметно, но не заливает картины. */
-const AMBIENT_TINT = 0.45
+/**
+ * Оттенок общего света для `lighting`: насыщеннее цвета SpotLight, потому что именно общий свет (небо, пол, солнце)
+ * определяет, как выглядит зал, и тёплый или холодный зал должен читаться с первого взгляда.
+ */
+const LIGHT_TINT: Record<SundayConfigLighting, string> = { neutral: '#ffffff', warm: '#ffb066', cool: '#8ab8ff' }
+/** Доля оттенка в цвете общего света: заметно, но картины не окрашиваются целиком (у них свой неосвещаемый материал). */
+const AMBIENT_TINT = 0.8
 /** Доля акцента в цвете стены с текстурой: иначе стены темнеют, а штукатурка пропадает. */
 const TEXTURED_ACCENT = 0.5
 
 export function lightingTint(lighting: SundayConfigLighting): THREE.Color {
-  return new THREE.Color('#ffffff').lerp(new THREE.Color(SPOT_COLORS[lighting]), AMBIENT_TINT)
+  return new THREE.Color('#ffffff').lerp(new THREE.Color(LIGHT_TINT[lighting]), AMBIENT_TINT)
 }
 
 export function wallTint(accent: string, textured: boolean): THREE.Color {
@@ -50,7 +57,10 @@ export function wallTint(accent: string, textured: boolean): THREE.Color {
 }
 
 export function createRuntimeView(parts: RuntimeViewParts): RuntimeView {
-  const { group, bounds, walls, ambient, guides, textured } = parts
+  const { group, bounds, walls, ambient, guides, textured, sun } = parts
+  const baseSky = ambient.color.clone()
+  const baseGround = ambient.groundColor.clone()
+  const baseSun = sun?.color.clone()
   let lamp: LampView | null = null
   let stand: InstallationView | null = null
   const guideSeen = new Map<string, string>()
@@ -106,7 +116,10 @@ export function createRuntimeView(parts: RuntimeViewParts): RuntimeView {
     lamp.object.visible = heldPose !== null
     // Свою лампу игрок видит в руке (оверлей): в мире остаётся только её свет.
     lamp.setModelVisible(!ownHeld)
-    if (heldPose) lamp.carry(heldPosition(heldPose), heldPose.yaw)
+    if (heldPose) {
+      const pitch = heldPose.pitch === undefined ? 0 : heldAim(heldPose.yaw, heldPose.pitch).head_pitch
+      lamp.carry(heldPosition(heldPose), heldPose.yaw, pitch)
+    }
   }
 
   return {
@@ -116,7 +129,10 @@ export function createRuntimeView(parts: RuntimeViewParts): RuntimeView {
       const tint = wallTint(config.accent_color, textured)
       for (const w of walls) (w.material as THREE.MeshStandardMaterial).color.copy(tint)
 
-      ambient.color.copy(lightingTint(config.lighting))
+      const tone = lightingTint(config.lighting)
+      ambient.color.copy(baseSky).multiply(tone)
+      ambient.groundColor.copy(baseGround).multiply(tone)
+      if (sun && baseSun) sun.color.copy(baseSun).multiply(tone)
 
       for (const g of rt.guides) {
         const actor = guides.find((a) => a.id === g.guide_id)

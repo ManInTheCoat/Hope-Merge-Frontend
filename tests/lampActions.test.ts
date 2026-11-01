@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import {
   AIM_STEP,
   HEAD_PITCH_MAX,
+  heldAim,
   heldPosition,
   holdsLamp,
   keyAct,
@@ -99,4 +100,14 @@ test('тексты: OBJECT_BUSY — «Лампу держит другой иг�
   expect(lampErrorText(new Error('REQUEST_TIMEOUT'))).not.toContain('REQUEST_TIMEOUT')
   expect(lampHint({ kind: 'lamp' })).toContain('E — взять')
   expect(lampHint({ kind: 'slot', slotId: 'b' })).toContain('поставить')
+})
+
+test('лампа в руках светит по взгляду: горизонтально, на 45° вниз — без добавки, предел ±π/3', () => {
+  expect(heldAim(0.5, 0).head_pitch).toBeCloseTo(-Math.PI / 4) // луч горизонтально: наклон вниз π/4 + (−π/4)
+  expect(heldAim(0.5, -Math.PI / 4).head_pitch).toBeCloseTo(0) // смотрим на 45° вниз — базовый наклон
+  expect(heldAim(0, Math.PI / 2).head_pitch).toBeCloseTo(-HEAD_PITCH_MAX) // вверх: предел
+  expect(heldAim(0, -Math.PI / 2).head_pitch).toBeCloseTo(Math.PI / 4) // строго вниз: ещё в пределах
+  const y = heldAim(Math.PI + 0.2, 0).yaw
+  expect(y).toBeGreaterThanOrEqual(-Math.PI)
+  expect(y).toBeLessThan(Math.PI)
 })

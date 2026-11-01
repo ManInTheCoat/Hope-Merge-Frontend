@@ -2,6 +2,7 @@ import type { ErrorBody } from '../network/contract'
 import type { SundayLamp, SundayObjectAct, SundayRoomRuntime } from '../network/sunday'
 import { rateLimitText, userErrorText } from '../ui/errorText'
 import { wrapAngle } from '../scene/angles'
+import { BASE_TILT } from '../scene/lamp'
 import { cylinderHitT, sightClear, type LookInput } from '../scene/targeting'
 
 /** Что игрок видит в прицеле: стоящая лампа или место (слот), куда можно поставить лампу из рук. */
@@ -95,7 +96,23 @@ export function keyAct(code: string, lamp: SundayLamp, ctx: Ctx): SundayObjectAc
 
 const clampPitch = (p: number) => Math.max(-HEAD_PITCH_MAX, Math.min(HEAD_PITCH_MAX, p))
 
-export type HeldPose = { x: number; z: number; yaw: number }
+export type HeldPose = {
+  x: number
+  z: number
+  yaw: number
+  /** Наклон камеры своего игрока: лампа в его руках светит туда, куда он смотрит. У чужих неизвестен. */
+  pitch?: number
+}
+
+const clampPitch2 = clampPitch
+
+/**
+ * Куда светит лампа в руках: по взгляду игрока. Наклон камеры вверх поднимает луч, вниз — опускает; сервер хранит
+ * его как head_pitch (к наклону вниз π/4 прибавляется head_pitch), поэтому предел ±π/3 действует и здесь.
+ */
+export function heldAim(yaw: number, cameraPitch: number): { yaw: number; head_pitch: number } {
+  return { yaw: wrapAngle(yaw), head_pitch: clampPitch2(-cameraPitch - BASE_TILT) }
+}
 
 /** Где висит перенесённая лампа: справа от игрока (при yaw=0 вправо — +X) и на метр выше пола. */
 export function heldPosition(p: HeldPose): { x: number; y: number; z: number } {

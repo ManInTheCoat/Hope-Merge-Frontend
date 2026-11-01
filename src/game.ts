@@ -25,6 +25,8 @@ import { buildRoom } from './scene/roomBuilder'
 import { pickDoor, pickTargetT, type Target } from './scene/targeting'
 import {
   HELD_HINT,
+  heldAim,
+  type HeldPose,
   holdsLamp,
   keyAct,
   lampErrorText,
@@ -669,19 +671,21 @@ export async function startGame(host: HTMLElement): Promise<void> {
    * Команда лампе (api-sunday.md §4). Одна за раз: expected_revision берётся из последнего принятого runtime,
    * поэтому следующая команда ждёт ответа предыдущей. Отправитель применяет runtime из ответа.
    */
-  async function actLamp(s: Session, build: (rt: SundayRoomRuntime) => SundayObjectAct | null) {
+  async function actLamp(s: Session, build: (rt: SundayRoomRuntime) => SundayObjectAct | null): Promise<boolean> {
     const rt = s.sync.current
-    if (s.lampBusy || actionsLocked(s) || !s.socket?.isOpen || !rt || !hasSunday(s.manifest)) return
+    if (s.lampBusy || actionsLocked(s) || !s.socket?.isOpen || !rt || !hasSunday(s.manifest)) return false
     const act = build(rt)
-    if (!act) return
+    if (!act) return false
     s.lampBusy = true
     lastLampSentAt = performance.now()
     sendMove(s, true) // сервер меряет расстояние до места по своей позиции
     try {
       const done = await s.socket.request('object.act', act, 'object.acted', SUNDAY_REQUEST_TIMEOUT_MS)
       if (session === s && s.sync.accept(done.runtime)) applyRuntime(s)
+      return true
     } catch (e) {
       if (session === s) hud.showMessage(lampErrorText(e))
+      return false
     } finally {
       s.lampBusy = false
     }
@@ -690,7 +694,15 @@ export async function startGame(host: HTMLElement): Promise<void> {
   /** E у лампы — взять, у слота с лампой в руках — поставить. */
   function interactLamp(s: Session, t: LampTarget) {
     const ctx = () => ({ movementEpoch: s.epoch, revision: s.sync.current?.revision ?? 0 })
-    void actLamp(s, () => (t.kind === 'lamp' ? takeAct(ctx()) : placeAct(ctx(), t.slotId)))
+    if (t.kind === 'lamp') return void actLamp(s, () => takeAct(ctx()))
+    // Лампа встаёт со слота с тем направлением, куда игрок смотрел: сразу показываем его и сохраняем командой aim.
+    const aim = heldAim(controls.yaw, controls.pitch)
+    void actLamp(s, () => placeAct(ctx(), t.slotId)).then((placed) => {
+      if (!placed || session !== s) return
+      aimPending = aim
+      s.built?.runtime.setLampPreview(aim)
+      scheduleAim(s, AIM_DEBOUNCE_MS)
+    })
   }
 
   /** Сбрасывает накопленный, но не отправленный поворот головки и его предпросмотр. */
@@ -1037,10 +1049,10 @@ export async function startGame(host: HTMLElement): Promise<void> {
   controls.onLampKey = lampKey
 
   /** Поза игрока, несущего лампу: своя — по камере, чужая — по интерполяции; null, если лампу никто не несёт. */
-  function holderPose(s: Session, now: number): { x: number; z: number; yaw: number } | null {
+  function holderPose(s: Session, now: number): HeldPose | null {
     const holder = s.sync.current?.lamp.holder_user_id
     if (!holder) return null
-    if (holder === s.selfId) return { x: s.pos.x, z: s.pos.z, yaw: controls.yaw }
+    if (holder === s.selfId) return { x: s.pos.x, z: s.pos.z, yaw: controls.yaw, pitch: controls.pitch }
     return s.players.poseOf(holder, now - RENDER_DELAY_MS)
   }
 
