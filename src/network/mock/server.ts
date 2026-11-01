@@ -20,6 +20,7 @@ import { mockSpeedOk, mockSweep, mockValidPose } from './geometry'
 import { checkPhotoForm, photoFingerprint } from './photoForm'
 import type { SundayClientMetric, SundayLamp, SundayRoomConfig } from '../sunday'
 import { createAdminState } from './admin'
+import { NpcSim } from './npc'
 import { defaultRuntime } from './runtime'
 import { loadMockState, mergeMockState, repairPose, saveMockState, type StoredAccount } from './storage'
 import { START_POSITION, START_ROOM_ID, WORLD_VERSION, type MockWorld } from './world'
@@ -31,6 +32,8 @@ const GUIDE_REPLY =
   'по ним специалисты определяют время и место создания. Если хотите, расскажу и о соседних работах.'
 
 const BOT_JOIN_DELAY_MS = 3_000
+/** FSM посетителей — 5 Гц (api-sunday.md §5). */
+const NPC_TICK_MS = 200
 const BOT_STAY_MS = 40_000
 const BOT_AWAY_MS = 10_000
 const BOT_CHAT_EVERY_MS = 30_000
@@ -491,6 +494,10 @@ export function createMockServer(
     private stateTimer: ReturnType<typeof setInterval> | null = null
     private probeTimer: ReturnType<typeof setInterval> | null = null
     private bot: Player
+    /** Симуляция посетителей зала игрока: создаётся при входе в зал, живёт, пока соединение владеет залом. */
+    private npcSim: NpcSim | null = null
+    private npcTimer: ReturnType<typeof setInterval> | null = null
+    private npcLastAt = 0
 
     // --- FPS и ping (api-sunday.md §7): данные живут столько же, сколько соединение ---
 
@@ -599,7 +606,9 @@ export function createMockServer(
           players: [],
           current_room: world.rooms.get(pose.room_id)!.pkg,
         })
-        this.send_('world.runtime', runtimes.get(pose.room_id)!) // сразу за snapshot (api-sunday.md §1)
+        this.startNpc(pose.room_id)
+        this.sendRuntime(pose.room_id) // сразу за snapshot (api-sunday.md §1), затем npc.state
+        this.npcTimer = setInterval(() => this.tickNpc(), NPC_TICK_MS)
         this.stateTimer = setInterval(() => this.broadcastState(), 100)
         this.probeTimer = setInterval(() => this.sendProbe(), probeEveryMs)
         this.later(() => this.botJoin(), BOT_JOIN_DELAY_MS)
@@ -690,7 +699,36 @@ export function createMockServer(
 
     /** Рассылает runtime зала, если игрок сейчас в нём (без request_id, как спонтанное обновление). */
     pushRuntime(roomId: string) {
-      if (this.self?.room_id === roomId) this.send_('world.runtime', runtimes.get(roomId)!)
+      if (this.self?.room_id === roomId) this.sendRuntime(roomId)
+    }
+
+    /** world.runtime, а за ним полный npc.state (api-sunday.md §1); число NPC берётся из config.npc_count. */
+    private sendRuntime(roomId: string, rid?: string) {
+      const rt = runtimes.get(roomId)!
+      this.send_('world.runtime', rt, rid)
+      if (this.npcSim && this.self?.room_id === roomId) {
+        this.npcSim.setCount(rt.config.npc_count)
+        this.send_('npc.state', this.npcSim.snapshot(), rid)
+      }
+    }
+
+    private startNpc(roomId: string) {
+      const room = world.rooms.get(roomId)!.room
+      this.npcSim = new NpcSim(room, room.world_version, runtimes.get(roomId)!.config.npc_count, `inst_${crypto.randomUUID().slice(0, 8)}`)
+      this.npcLastAt = clock()
+    }
+
+    /** Тик FSM 5 Гц: двигает посетителей и рассылает полный снимок. */
+    private tickNpc() {
+      const sim = this.npcSim
+      if (!sim || !this.self) return
+      const t = clock()
+      const dt = Math.max(0, Math.min((t - this.npcLastAt) / 1000, 0.5))
+      this.npcLastAt = t
+      const players = [{ user_id: this.self.user_id, position: this.self.position }]
+      if (this.botPresent) players.push({ user_id: this.bot.user_id, position: this.bot.position })
+      sim.step(dt, t, players)
+      this.send_('npc.state', sim.snapshot())
     }
 
     private error(code: string, message: string, request_id?: string, extra: Partial<ErrorBody> = {}) {
@@ -719,6 +757,8 @@ export function createMockServer(
       this.ready = false
       if (this.stateTimer) clearInterval(this.stateTimer)
       if (this.probeTimer) clearInterval(this.probeTimer)
+      if (this.npcTimer) clearInterval(this.npcTimer)
+      this.npcSim = null
       this.timers.forEach((t) => clearTimeout(t))
       this.timers.clear()
       if (socket === this) socket = null
@@ -810,7 +850,8 @@ export function createMockServer(
           acc.pose = { room_id: self.room_id, position: { ...spawn }, rotation: { yaw: 0, pitch: 0 } }
           persist() // переход сохраняется до подтверждения (api.md §2)
           this.send_('world.entered', { self, current_room: world.rooms.get(door.target_room_id)!.pkg }, rid)
-          return this.send_('world.runtime', runtimes.get(door.target_room_id)!) // world.entered опережает runtime
+          this.startNpc(door.target_room_id)
+          return this.sendRuntime(door.target_room_id) // world.entered опережает runtime и npc.state
         }
         case 'room.sync': {
           // Требует owning WS, но не ready; состояния не меняет. Ответ — полный снимок с request_id запроса.
@@ -821,7 +862,7 @@ export function createMockServer(
             return this.error('RATE_LIMITED', 'Слишком часто', rid, { retry_after_ms: Math.ceil(SYNC_WINDOW_MS - (nowMs - sent[0])) })
           }
           sent.push(nowMs)
-          return this.send_('world.runtime', runtimes.get(self.room_id)!, rid)
+          return this.sendRuntime(self.room_id, rid)
         }
         case 'chat.send': {
           const text = (msg.payload.text ?? '').trim()
@@ -841,6 +882,7 @@ export function createMockServer(
           }
           sent.push(nowMs)
           if (photo) photo.photo.published = true
+          if (text) this.npcSim?.chat(acc.user.id, self.position, clock()) // фото без текста посетителей не трогает
           this.later(() => this.botSay(BOT_REPLIES[Math.floor(Math.random() * BOT_REPLIES.length)]), 1000 + Math.random() * 1000)
           return this.send_(
             'chat.message',
