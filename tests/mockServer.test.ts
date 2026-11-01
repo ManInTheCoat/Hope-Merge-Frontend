@@ -294,3 +294,27 @@ test('вкладка не затирает свежую позу чужого а
   const stored = JSON.parse(storage.getItem('hope-merge-mock-v1')!) as { accounts: Array<{ user: { username: string }; pose: { position: { z: number } } }> }
   expect(stored.accounts.find((a) => a.user.username === 'bob')!.pose.position.z).toBeCloseTo(4.7, 9)
 })
+
+test('GET /photos: страницы по курсору от новых к старым, неверный курсор — 400, чужие фото не видны', async () => {
+  const j = await joined()
+  for (const c of ['a', 'b', 'c']) expect((await postPhoto(j, c)).status).toBe(201)
+  type Page = { items: { caption: string }[]; next_cursor: string | null }
+  const get = async (q: string) => j.server.fetch(`http://localhost/api/v1/photos?${q}`)
+  const p1 = (await (await get('limit=2')).json()) as Page
+  expect(p1.items.map((p) => p.caption)).toEqual(['c', 'b'])
+  expect(p1.next_cursor).not.toBeNull()
+  const p2 = (await (await get(`limit=2&cursor=${encodeURIComponent(p1.next_cursor!)}`)).json()) as Page
+  expect(p2.items.map((p) => p.caption)).toEqual(['a'])
+  expect(p2.next_cursor).toBeNull()
+  expect((await get('limit=2&cursor=zzz')).status).toBe(400)
+})
+
+test('миниатюра: thumbnail_bytes равен размеру отдаваемого файла', async () => {
+  const j = await joined()
+  const photo = (await (await postPhoto(j, 'x')).json()) as { thumbnail_url: string; thumbnail_bytes: number; image_bytes: number }
+  const body = await (await j.server.fetch(`http://localhost${photo.thumbnail_url}`)).blob()
+  expect(body.size).toBe(photo.thumbnail_bytes)
+  expect(photo.thumbnail_bytes).toBeLessThanOrEqual(131072)
+  const full = await (await j.server.fetch(`http://localhost${photo.thumbnail_url.replace('thumbnail', 'image')}`)).blob()
+  expect(full.size).toBe(photo.image_bytes)
+})

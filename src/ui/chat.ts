@@ -1,5 +1,6 @@
 import { inputMeta, trimWs } from './text'
-import { CHAT_MAX_LEN, ChatLog, validateChatText, type ChatLine } from './chatLog'
+import type { Photo } from '../network/contract'
+import { CHAT_MAX_LEN, ChatLog, chatLineText, validateChatText, type ChatLine } from './chatLog'
 
 const FADE_AFTER_MS = 10_000
 const COUNTER_FROM = 450
@@ -7,6 +8,8 @@ const NEUTRAL_COLOR = '#c9c4bb'
 
 export type Chat = {
   add(line: ChatLine): void
+  /** Перерисовать ленту: у строк изменились картинки. */
+  refresh(): void
   open(): void
   /** Вернуть фокус в поле открытого чата. */
   focus(): void
@@ -18,6 +21,8 @@ export type Chat = {
 export type ChatOptions = {
   /** Отправка; промис отклоняется с текстом ошибки для показа под полем. */
   onSend: (text: string) => Promise<void>
+  /** Клик по фото в ленте (чат открыт, мышь свободна): показать его крупно. */
+  onPhoto: (photo: Photo) => void
   /** Поле закрыто: `sent` — после успешной отправки, иначе по Esc. */
   onClose: (sent: boolean) => void
 }
@@ -76,7 +81,17 @@ export function createChat(root: HTMLElement, opts: ChatOptions): Chat {
         const name = document.createElement('b')
         name.textContent = `${l.author}: `
         name.style.color = l.color ?? NEUTRAL_COLOR
-        row.append(name, document.createTextNode(l.text))
+        row.append(name, document.createTextNode(chatLineText(l.text, l.photo)))
+        if (l.photo?.url) {
+          const img = document.createElement('img')
+          img.className = 'chat-photo'
+          img.src = l.photo.url
+          img.alt = l.photo.alt
+          img.title = 'Открыть крупно'
+          const full = l.photo.full
+          img.addEventListener('click', () => opts.onPhoto(full))
+          row.appendChild(img)
+        }
         return row
       }),
     )
@@ -143,6 +158,9 @@ export function createChat(root: HTMLElement, opts: ChatOptions): Chat {
       log.push(line)
       render()
       wake()
+    },
+    refresh() {
+      render()
     },
     focus() {
       if (isOpen) input.focus()

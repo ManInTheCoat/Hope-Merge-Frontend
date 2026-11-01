@@ -1,12 +1,13 @@
 import * as THREE from 'three'
-import { ContentError, fetchAssetBlob, fetchGenerationByRequest, fetchGenerations, fetchManifest, fetchMe, fetchRoom, logout, uploadPhoto } from './network/api'
-import { type Door, type ErrorBody, type Exhibit, type Guide } from './network/contract'
+import { ContentError, fetchAssetBlob, fetchGenerationByRequest, fetchGenerations, fetchManifest, fetchMe, fetchPhotoBlob, fetchPhotos, fetchRoom, logout, uploadPhoto } from './network/api'
+import { type Door, type ErrorBody, type Exhibit, type Guide, type Photo } from './network/contract'
 import { closeAction, ReconnectLoop, type ConnectResult, type LinkState } from './network/reconnect'
 import { uuidV4 } from './network/uuid'
 import { FpsMeter, startTelemetry } from './network/telemetry'
 import { fetchAdminMe } from './network/adminApi'
 import { GameSocket } from './network/ws'
 import { canvasEncoder, copyFrame, encodeUnderLimit } from './photo/frame'
+import { ChatThumbs } from './photo/chatThumbs'
 import { photoKeyAction } from './photo/keys'
 import { downloadBlob, LastPhoto } from './photo/lastPhoto'
 import { photoErrorText, savePhoto, type Shot } from './photo/save'
@@ -41,10 +42,14 @@ import { RENDER_DELAY_MS } from './players/interpolation'
 import { guideActionDoneText, guideActionErrorText } from './ui/guideAction'
 import { createChat } from './ui/chat'
 import { createControlsBar } from './ui/controlsBar'
-import { chatKeyAction, chatLineText } from './ui/chatLog'
+import { chatKeyAction } from './ui/chatLog'
 import { askErrorText, GuideAsks } from './ui/guideAsks'
 import { panelKeyAction } from './ui/guideKeys'
 import { createAdminPanel } from './ui/adminPanel'
+import { createAlbumPanel } from './ui/albumPanel'
+import { AlbumController, type AlbumState } from './album/albumController'
+import { albumKeyAction } from './album/albumKeys'
+import { albumFileName, shareBlockReason } from './album/albumText'
 import { createGuidePanel } from './ui/guidePanel'
 import { NO_CONNECTION, NO_RESPONSE, userErrorText } from './ui/errorText'
 import { createHud } from './ui/hud'
@@ -150,7 +155,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
 
   const controls = new FirstPersonControls(renderer.domElement, (locked) => {
     const s = session
-    hud.showClickOverlay(!locked && !!s?.ready && !chat.isOpen && !guidePanel.isOpen && !adminPanel.isOpen, () => controls.lock())
+    hud.showClickOverlay(!locked && !!s?.ready && !chat.isOpen && !guidePanel.isOpen && !adminPanel.isOpen && !albumPanel.isOpen, () => controls.lock())
     if (!locked) closeCard()
   })
   controls.enabled = false
@@ -164,6 +169,10 @@ export async function startGame(host: HTMLElement): Promise<void> {
       } catch (e) {
         throw new Error(userErrorText(e))
       }
+    },
+    onPhoto: (photo) => {
+      chat.close() // сам по себе onClose не вызывает: управление вернёт закрытие просмотра
+      openAlbum(photo)
     },
     onClose: (sent) => resumeControls(sent),
   })
@@ -316,13 +325,120 @@ export async function startGame(host: HTMLElement): Promise<void> {
     onDownload: () => downloadPhoto(),
   })
 
+  /** Альбом (B): сетка собственных фото и просмотр; живёт на бюджете текущей сессии и не требует игрового WS. */
+  let album: AlbumController | null = null
+  /** URL открытого в просмотре оригинала: нужен кнопке «Скачать». */
+  let albumUrl: string | null = null
+
+  /** Миниатюры фото в чате: живут на бюджете текущей сессии, на время альбома освобождаются. */
+  let chatThumbs: ChatThumbs | null = null
+  let chatThumbsBudget: AssetBudget | null = null
+  function chatThumbsFor(budget: AssetBudget): ChatThumbs {
+    if (!chatThumbs || chatThumbsBudget !== budget) {
+      chatThumbs?.releaseAll()
+      chatThumbsBudget = budget
+      chatThumbs = new ChatThumbs({
+        budget,
+        fetchBlob: fetchPhotoBlob,
+        makeUrl: (blob) => URL.createObjectURL(blob),
+        revokeUrl: (url) => URL.revokeObjectURL(url),
+        onChange: () => chat.refresh(),
+      })
+      if (albumPanel.isOpen) chatThumbs.suspend()
+    }
+    return chatThumbs
+  }
+
+  function renderAlbum(state: AlbumState) {
+    albumUrl = state.kind === 'viewer' ? state.url : null
+    albumPanel.render(state, {
+      blockedReason: shareBlockReason({ ready: !!session?.ready, socketOpen: !!session?.socket?.isOpen }),
+    })
+  }
+
+  const albumPanel = createAlbumPanel(host, {
+    onClose: () => closeAlbum(),
+    onRetry: () => void album?.retry(),
+    onPrev: () => void album?.prev(),
+    onNext: () => void album?.next(),
+    onView(photoId) {
+      releaseLastShot()
+      void album?.view(photoId)
+    },
+    onBack: () => album?.backToGrid(),
+    onDownload() {
+      const viewed = album?.viewed
+      if (viewed && albumUrl) downloadBlob(albumUrl, albumFileName(viewed.photo))
+    },
+    async onShare(photoId) {
+      const s = session
+      const reason = shareBlockReason({ ready: !!s?.ready, socketOpen: !!s?.socket?.isOpen })
+      if (reason || !s?.socket) throw new Error(reason ?? NO_CONNECTION)
+      try {
+        await s.socket.request('chat.send', { photo_id: photoId }, 'chat.message', CHAT_SEND_TIMEOUT_MS)
+      } catch (e) {
+        throw new Error(userErrorText(e))
+      }
+      album?.markPublished(photoId)
+    },
+  })
+
+  /** Оригинал альбома и оригинал последнего снимка вместе не помещаются в резерв фото (api.md §3). */
+  function releaseLastShot() {
+    lastShot = null
+    photoCard.hide()
+    session?.photo?.release()
+  }
+
+  /** Без `single` — альбом с сеткой; с `single` — крупный просмотр одного фото (клик в чате). */
+  function openAlbum(single?: Photo) {
+    const s = session
+    if (!s?.budget || albumPanel.isOpen) return
+    if (!single) chatThumbs?.suspend() // шесть миниатюр альбома не должны складываться с чатовыми (api.md §3)
+    hud.showHint(null)
+    controls.enabled = false
+    controls.keys.clear()
+    hud.showClickOverlay(false)
+    album = new AlbumController(
+      {
+        fetchPage: fetchPhotos,
+        fetchBlob: fetchPhotoBlob,
+        budget: s.budget,
+        makeUrl: (blob) => URL.createObjectURL(blob),
+        revokeUrl: (url) => URL.revokeObjectURL(url),
+      },
+      renderAlbum,
+    )
+    // Панель открываем до снятия захвата: обработчик pointerlockchange должен видеть её открытой.
+    albumPanel.open()
+    if (controls.locked) document.exitPointerLock()
+    if (single) {
+      releaseLastShot()
+      void album.openSingle(single)
+    } else void album.open()
+  }
+
+  /** Освободить память альбома и спрятать панель; управление не трогаем. */
+  function dropAlbum() {
+    chatThumbs?.resume()
+    album?.close()
+    album = null
+    albumUrl = null
+    albumPanel.close()
+  }
+
+  function closeAlbum() {
+    dropAlbum()
+    resumeControls(true)
+  }
+
   /** Игровые действия (движение, E, F, повтор фото) заблокированы: нет готовности, связь потеряна или идёт фото. */
   function actionsLocked(s: Session | null): boolean {
     return !s || !s.ready || s.lost || s.photoBusy
   }
 
   function canShoot(s: Session | null): s is Session {
-    return !actionsLocked(s) && !!s!.photo && controls.locked && !cardFor && !chat.isOpen && !guidePanel.isOpen && !adminPanel.isOpen
+    return !actionsLocked(s) && !!s!.photo && controls.locked && !cardFor && !chat.isOpen && !guidePanel.isOpen && !adminPanel.isOpen && !albumPanel.isOpen
   }
 
   function downloadPhoto() {
@@ -516,6 +632,20 @@ export async function startGame(host: HTMLElement): Promise<void> {
 
   document.addEventListener('keydown', (e) => {
     if (e.repeat) return
+    const albumAction = albumKeyAction(e.code, {
+      typing: typingInField(),
+      open: albumPanel.isOpen,
+      viewer: (album?.isViewer ?? false) && !album?.isSingle, // из чата Escape закрывает всё
+      blocked: loginScreen.visible || !!cardFor || chat.isOpen || guidePanel.isOpen || adminPanel.isOpen || !session?.budget || !!session?.photoBusy,
+    })
+    if (albumAction) {
+      e.preventDefault()
+      if (albumAction === 'open') openAlbum()
+      else if (albumAction === 'back') album?.backToGrid()
+      else closeAlbum()
+      return
+    }
+    if (albumPanel.isOpen) return // пока альбом открыт, игровые клавиши молчат
     const shooter = canShoot(session) ? session : null
     const photoAction = photoKeyAction(e.code, {
       typing: typingInField(),
@@ -585,6 +715,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
   function teardown(s: Session | null, reconnecting = false) {
     if (!s) return
     s.ready = false
+    dropAlbum() // бюджет этой сессии больше не действует
     s.ac.abort()
     // Отписка до выгрузки зала: иначе release при unload снова покажет строку кеша.
     s.budgetOff?.()
@@ -606,6 +737,9 @@ export async function startGame(host: HTMLElement): Promise<void> {
     s.players.clear()
     view.clear()
     chat.close()
+    chatThumbs?.releaseAll()
+    chatThumbs = null
+    chatThumbsBudget = null
     if (!reconnecting) chat.clear()
     guidePanel.close()
     adminPanel.close()
@@ -929,13 +1063,11 @@ export async function startGame(host: HTMLElement): Promise<void> {
       snapshot.players.forEach((p) => s.players.upsert(p, t0))
       socket.on('player.joined', ({ player }) => s.players.upsert(player, performance.now()))
       socket.on('player.left', ({ user_id }) => s.players.remove(user_id))
-      socket.on('chat.message', ({ author, text, photo }) =>
-        chat.add({
-          author: author.display_name,
-          color: s.players.colorOf(author.user_id),
-          text: chatLineText(text, photo !== null),
-        }),
-      )
+      socket.on('chat.message', ({ author, text, photo }) => {
+        const shot = photo ? { id: photo.id, alt: 'Фото', url: null as string | null, full: photo } : undefined
+        chat.add({ author: author.display_name, color: s.players.colorOf(author.user_id), text, photo: shot })
+        if (shot && photo && s.budget) chatThumbsFor(s.budget).show(shot, photo)
+      })
       socket.on('guide.accepted', ({ generation }, env) => asks.accepted(env.request_id ?? '', generation))
       socket.on('guide.started', ({ generation_id }) => {
         asks.started(generation_id)

@@ -9,6 +9,7 @@ import {
   type Manifest,
   type MeResponse,
   type Photo,
+  type PhotosPage,
   type RegisterRequest,
   type Room,
   type User,
@@ -153,4 +154,19 @@ export async function fetchMe(): Promise<MeResponse | null> {
 export async function uploadPhoto(form: FormData, key: string, signal?: AbortSignal): Promise<Photo> {
   const res = await apiFetch('/photos', { method: 'POST', headers: { 'Idempotency-Key': key }, body: form, signal })
   return res.json()
+}
+
+/** Страница собственных фото альбома: от новых к старым, по 6 (api.md, «Фото»). */
+export async function fetchPhotos(cursor: string | null, signal?: AbortSignal): Promise<PhotosPage> {
+  const tail = cursor === null ? '' : `&cursor=${encodeURIComponent(cursor)}`
+  return (await apiFetch(`/photos?limit=6${tail}`, { signal })).json()
+}
+
+/** Оригинал или миниатюра по `image_url`/`thumbnail_url`; байты сверх объявленных не читаются. */
+export async function fetchPhotoBlob(url: string, maxBytes: number, signal?: AbortSignal): Promise<Blob> {
+  const path = url.startsWith(API_BASE) ? url.slice(API_BASE.length) : url
+  const res = await apiFetch(path, { signal })
+  const type = res.headers.get('Content-Type') ?? ''
+  const bytes = await readLimited(res, maxBytes)
+  return new Blob([bytes as BlobPart], { type })
 }

@@ -1,3 +1,4 @@
+import type { ChatPhoto } from '../photo/chatThumbs'
 import { validateText } from './text'
 
 export const CHAT_MAX_LEN = 500
@@ -6,11 +7,11 @@ const CHAT_KEEP = 100
 /** Текст после trim в кодовых точках 1–500, иначе null (api.md §6). */
 export const validateChatText = (raw: string): string | null => validateText(raw, CHAT_MAX_LEN)
 
-export type ChatLine = { author: string; color: string | null; text: string }
+export type ChatLine = { author: string; color: string | null; text: string; photo?: ChatPhoto }
 
-/** Фото в чате этот этап не показывает: сообщение только с фото выводим заглушкой. */
-export function chatLineText(text: string, hasPhoto: boolean): string {
-  return !text && hasPhoto ? '[фото]' : text
+/** Текст строки: у сообщения только с фото, пока миниатюры нет (грузится или вытеснена), вместо неё заглушка. */
+export function chatLineText(text: string, photo: ChatPhoto | undefined): string {
+  return !text && photo && !photo.url ? '[фото]' : text
 }
 
 /** История на сервере не хранится: держим в памяти последние CHAT_KEEP сообщений. */
