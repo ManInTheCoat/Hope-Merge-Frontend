@@ -51,6 +51,18 @@ export function moveVector(keys: MoveState, yaw: number, speedMps: number, dt: n
   return { x: (-sin * f + cos * r) * k, z: (-cos * f - sin * r) * k }
 }
 
+/**
+ * Доля серверного предела скорости для отправки шага. Больше скорости ходьбы (CLIENT_SPEED_FACTOR): иначе
+ * отставание отправленной позиции от игрока, появившись из-за дрожания кадров, больше не сокращается,
+ * и на бегу сервер видит игрока на 0,3–1 м позади («слишком далеко от двери» при видимой подсказке).
+ */
+const SEND_SPEED_FACTOR = 0.95
+
+/** Сколько метров можно отправить серверу за `elapsedMs` с прошлой отправки (сервер считает dt не больше 0,25 с). */
+export function moveSendBudget(maxSpeedMps: number, elapsedMs: number): number {
+  return maxSpeedMps * SEND_SPEED_FACTOR * Math.min(elapsedMs / 1000, 0.25)
+}
+
 /** Клиент ходит чуть медленнее серверного максимума: кадры и сеть дают джиттер, а сервер отклоняет весь шаг при превышении. */
 export const CLIENT_SPEED_FACTOR = 0.9
 

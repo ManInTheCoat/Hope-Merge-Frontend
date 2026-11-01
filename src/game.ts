@@ -12,7 +12,7 @@ import { PlayerRegistry } from './players/registry'
 import { RemotePlayersView } from './players/view'
 import { activeColliders, moveCylinder } from './scene/collision'
 import { FirstPersonControls, typingInField } from './scene/controls'
-import { CLIENT_SPEED_FACTOR, moveVector, shouldSendMove } from './scene/input'
+import { CLIENT_SPEED_FACTOR, moveSendBudget, moveVector, shouldSendMove } from './scene/input'
 import { HandCamera } from './scene/handCamera'
 import { buildRoom } from './scene/roomBuilder'
 import { pickDoor, pickTarget, type Target } from './scene/targeting'
@@ -614,9 +614,9 @@ export async function startGame(host: HTMLElement): Promise<void> {
     if (force && !shouldSendMove(s.lastMoveSentAt, now, MIN_MOVE_GAP_MS)) return
     const m = s.manifest?.movement
     if (!m || !s.moveWorld) return
-    // Сервер разрешает 4·min(dt, 0,25) м: идём с тем же запасом, что и при ходьбе.
+    // Сервер разрешает 4·min(dt, 0,25) м; бюджет отправки чуть больше скорости ходьбы, чтобы отставание догонялось.
     const elapsed = s.lastMoveSentAt === null ? MOVE_SEND_INTERVAL_MS : now - s.lastMoveSentAt
-    const maxStep = m.max_speed_mps * CLIENT_SPEED_FACTOR * Math.min(elapsed / 1000, 0.25)
+    const maxStep = moveSendBudget(m.max_speed_mps, elapsed)
     const pos = s.path.take(s.moveWorld, m.player_radius_m, maxStep) ?? s.path.sent
     s.pathBehind = s.path.pending
     s.lastMoveSentAt = now
@@ -804,9 +804,10 @@ export async function startGame(host: HTMLElement): Promise<void> {
         camera.getWorldDirection(dir)
         target = cardFor
           ? null
-          : pickTarget({ eye: camera.position, dir, colliders: s.built.colliders }, s.exhibits, s.guides)
-        // Экспонат или гид в прицеле важнее двери рядом.
-        doorTarget = cardFor || target ? null : pickDoor(s.pos, s.doors, s.built.colliders)
+          : pickTarget({ eye: camera.position, dir, colliders: s.built.colliders, rangeFrom: s.path.sent }, s.exhibits, s.guides)
+        // Экспонат или гид в прицеле важнее двери рядом. Расстояние — от позиции, которую уже знает сервер:
+        // подсказка появляется, только когда он примет действие.
+        doorTarget = cardFor || target ? null : pickDoor(s.path.sent, s.doors, s.built.colliders)
         const hint =
           target?.kind === 'exhibit'
             ? `E — осмотреть: ${target.exhibit.title}`

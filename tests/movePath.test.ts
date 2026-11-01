@@ -117,3 +117,32 @@ test('плотный обход угла на реальной коллизии:
     }
   }
 })
+
+import { moveSendBudget } from '../src/scene/input'
+
+test('на бегу отставание отправленной позиции не копится: догоняет при дрожании кадров', () => {
+  const world: MoveWorld = { colliders: [], bounds: { minX: -100, maxX: 100, minZ: -100, maxZ: 100 } }
+  const path = new MovePath()
+  let pos = { x: 0, z: 0 }
+  path.reset(pos)
+  let t = 0
+  let nextSend = 107 // таймер отправки не совпадает с кадрами
+  let lastSend = 7
+  // 3 секунды бега 3,6 м/с; кадры 13–20 мс вразнобой
+  const frames = [16, 20, 13, 17, 19, 14, 16, 18]
+  for (let i = 0; i < 180; i++) {
+    const dt = frames[i % frames.length]
+    // Отправки, сработавшие до этого кадра, видят только уже записанные точки.
+    while (nextSend <= t + dt) {
+      path.take(world, R, moveSendBudget(4, nextSend - lastSend))
+      lastSend = nextSend
+      nextSend += 100
+    }
+    t += dt
+    pos = { x: 0, z: pos.z - 3.6 * (dt / 1000) }
+    path.record(pos)
+  }
+  // Отправленная позиция отстаёт на неотправленный хвост (< интервала), а не копит отставание.
+  const unsent = 3.6 * ((t - lastSend) / 1000)
+  expect(Math.abs(path.sent.z - pos.z)).toBeLessThan(unsent + 0.08)
+})

@@ -30,7 +30,8 @@ function segmentHitsBox(a: Vec3, b: Vec3, box: Aabb): boolean {
   return true
 }
 
-type LookInput = { eye: Vec3; dir: Vec3; colliders?: Aabb[] }
+/** `rangeFrom` — позиция, которую знает сервер: от неё он меряет радиус взаимодействия. По умолчанию — камера. */
+type LookInput = { eye: Vec3; dir: Vec3; colliders?: Aabb[]; rangeFrom?: Vec2 }
 
 /** Радиус и высота цилиндра, в который должен попасть взгляд, чтобы выбрать гида. */
 const GUIDE_HIT_RADIUS_M = 0.4
@@ -43,7 +44,8 @@ export type Target = { kind: 'exhibit'; exhibit: Exhibit } | { kind: 'guide'; gu
 /** Расстояние по лучу до картины или null, если взгляд в неё не попадает. */
 function exhibitHitT(input: LookInput, e: Exhibit, hintRadiusM: number): number | null {
   const { eye, dir } = input
-  if (Math.hypot(e.position.x - eye.x, e.position.z - eye.z) > hintRadiusM) return null
+  const from = input.rangeFrom ?? eye
+  if (Math.hypot(e.position.x - from.x, e.position.z - from.z) > hintRadiusM) return null
 
   const nx = Math.sin(e.rotation_y)
   const nz = Math.cos(e.rotation_y)
@@ -65,7 +67,8 @@ function exhibitHitT(input: LookInput, e: Exhibit, hintRadiusM: number): number 
 /** Расстояние по лучу до входа в цилиндр гида или null (дальше радиуса, мимо, за стеной). */
 function guideHitT(input: LookInput, g: Guide, hintRadiusM: number): number | null {
   const { eye, dir } = input
-  if (Math.hypot(g.position.x - eye.x, g.position.z - eye.z) > hintRadiusM) return null
+  const from = input.rangeFrom ?? eye
+  if (Math.hypot(g.position.x - from.x, g.position.z - from.z) > hintRadiusM) return null
 
   // |(eye + dir·t − p)_xz|² = r²
   const ox = eye.x - g.position.x

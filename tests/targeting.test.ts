@@ -156,3 +156,11 @@ test('pickDoor: пол под точкой двери не закрывает е
   const floor = { minX: -10, maxX: 10, minY: -0.2, maxY: 0, minZ: -10, maxZ: 10 }
   expect(pickDoor({ x: 0, z: 0 }, [door('d', 0, 1)], [floor])?.id).toBe('d')
 })
+
+test('подсказка считает расстояние от позиции, известной серверу, а не от камеры', () => {
+  const target = ex('main', 0, -8)
+  const eye = { x: 0, y: 1.65, z: -5.5 } // камера в 2,5 м — в радиусе подсказки
+  const dir = { x: 0, y: 0, z: -1 }
+  expect(pickTarget({ eye, dir, rangeFrom: { x: 0, z: -5.5 } }, [target], [])?.kind).toBe('exhibit')
+  expect(pickTarget({ eye, dir, rangeFrom: { x: 0, z: -4.9 } }, [target], [])).toBeNull() // сервер видит 3,1 м
+})
