@@ -19,6 +19,7 @@ import { wrapAngle } from '../../scene/angles'
 import { mockSpeedOk, mockSweep, mockValidPose } from './geometry'
 import { checkPhotoForm, photoFingerprint } from './photoForm'
 import type { SundayClientMetric, SundayLamp, SundayRoomConfig } from '../sunday'
+import { createAdminState } from './admin'
 import { defaultRuntime } from './runtime'
 import { loadMockState, mergeMockState, repairPose, saveMockState, type StoredAccount } from './storage'
 import { START_POSITION, START_ROOM_ID, WORLD_VERSION, type MockWorld } from './world'
@@ -48,6 +49,9 @@ const METRICS_STALE_MS = 6_000
 /** Предел каждого типа telemetry: 2 в секунду на соединение, лишние валидные отбрасываются молча. */
 const TELEMETRY_LIMIT = 2
 const TELEMETRY_WINDOW_MS = 1_000
+/** Все PUT админки вместе: 10 за 10 с на пользователя (api-sunday.md §3). */
+const ADMIN_PUT_LIMIT = 10
+const ADMIN_PUT_WINDOW_MS = 10_000
 const TELEMETRY_TYPES: ReadonlySet<string> = new Set(['client.metrics', 'telemetry.pong'])
 /** Позиция сохраняется раз в 5 секунд и при штатном отключении (api.md §2). */
 const POSE_SAVE_EVERY_MS = 5_000
@@ -91,6 +95,8 @@ export type MockServer = {
   patchRuntime(patch: { config?: Partial<SundayRoomConfig>; lamp?: Partial<SundayLamp> }): void
   /** Что видит админка в GET /admin/clients: FPS, ping и видимость вкладки текущего соединения (пусто без соединения). */
   clients(): SundayClientMetric[]
+  /** Выдаёт роль администратора существующему аккаунту (у сервера — `./bin/admin grant`); false — нет такого имени. */
+  grantAdmin(username: string): boolean
 }
 
 function json(status: number, body?: unknown, headers: Record<string, string> = {}): Response {
@@ -162,6 +168,9 @@ export function createMockServer(
   const syncs = new Map<string, number[]>()
   /** Runtime залов: у сервера он в PostgreSQL, здесь — в памяти вкладки. */
   const runtimes = new Map([...world.rooms].map(([id, r]) => [id, defaultRuntime(r.room)]))
+  const admin = createAdminState(world, runtimes)
+  /** Время PUT админки по user_id. */
+  const adminPuts = new Map<string, number[]>()
 
   const now = () => new Date().toISOString()
   const newId = (prefix: string) => `${prefix}_${crypto.randomUUID().slice(0, 8)}`
@@ -213,6 +222,7 @@ export function createMockServer(
         const account: Account = {
           user,
           password,
+          admin: accounts.size === 0, // первый аккаунт — администратор, остальным роль выдаёт __mock.grantAdmin
           pose: { room_id: START_ROOM_ID, position: { ...START_POSITION }, rotation: { yaw: 0, pitch: 0 } },
         }
         accounts.set(username, account)
@@ -244,6 +254,8 @@ export function createMockServer(
     if (method === 'GET' && path === '/me') {
       return json(200, { user: account.user, player_state: account.pose })
     }
+
+    if (path.startsWith('/admin/')) return handleAdmin(req, method, path, account)
 
     if (method === 'GET' && path === '/world/manifest') return json(200, world.manifest)
 
@@ -310,6 +322,76 @@ export function createMockServer(
       return new Response(entry.blob, { headers: { 'Content-Type': entry.blob.type, 'Cache-Control': 'no-store' } })
     }
 
+    return httpError(404, 'NOT_FOUND', 'Нет такого маршрута')
+  }
+
+  /** `/admin/*`: роль проверяется на каждом запросе (api-sunday.md §3). */
+  async function handleAdmin(req: Request, method: string, path: string, account: Account): Promise<Response> {
+    if (!account.admin) return httpError(403, 'FORBIDDEN', 'Нужна роль администратора')
+    const fail = (r: { status: number; code: string; message: string; fields?: Record<string, string>; retry_after_ms?: number }) => {
+      const request_id = crypto.randomUUID()
+      const error = {
+        code: r.code,
+        message: r.message,
+        request_id,
+        ...(r.fields ? { fields: r.fields } : {}),
+        ...(r.retry_after_ms ? { retry_after_ms: r.retry_after_ms } : {}),
+      }
+      const retry: Record<string, string> = r.retry_after_ms ? { 'Retry-After': String(Math.ceil(r.retry_after_ms / 1000)) } : {}
+      return json(r.status, { error }, { 'X-Request-ID': request_id, ...retry })
+    }
+    const id = (m: RegExpMatchArray) => decodeURIComponent(m[1])
+
+    if (method === 'GET') {
+      if (path === '/admin/me') return json(200, { user_id: account.user.id, role: 'admin' })
+      if (path === '/admin/clients') {
+        const row = socket?.metricsRow()
+        return json(200, { clients: row ? [row] : [] })
+      }
+      if (path === '/admin/rooms') return json(200, admin.rooms())
+      if (path === '/admin/guides') return json(200, admin.guides())
+      const room = path.match(/^\/admin\/rooms\/([^/]+)$/)
+      if (room) {
+        const rt = admin.room(id(room))
+        return rt ? json(200, rt) : httpError(404, 'NOT_FOUND', 'Нет такого зала')
+      }
+      const guide = path.match(/^\/admin\/guides\/([^/]+)$/)
+      if (guide) {
+        const g = admin.guide(id(guide))
+        return g ? json(200, g) : httpError(404, 'NOT_FOUND', 'Нет такого гида')
+      }
+      return httpError(404, 'NOT_FOUND', 'Нет такого маршрута')
+    }
+
+    if (method === 'PUT') {
+      const room = path.match(/^\/admin\/rooms\/([^/]+)$/)
+      const guide = path.match(/^\/admin\/guides\/([^/]+)$/)
+      if (!room && !guide) return httpError(404, 'NOT_FOUND', 'Нет такого маршрута')
+      const t = clock()
+      const sent = (adminPuts.get(account.user.id) ?? []).filter((x) => t - x < ADMIN_PUT_WINDOW_MS)
+      adminPuts.set(account.user.id, sent)
+      if (sent.length >= ADMIN_PUT_LIMIT) {
+        const retry_after_ms = Math.ceil(ADMIN_PUT_WINDOW_MS - (t - sent[0]))
+        return fail({ status: 429, code: 'RATE_LIMITED', message: 'Слишком часто', retry_after_ms })
+      }
+      sent.push(t)
+      let body: unknown
+      try {
+        body = await req.json()
+      } catch {
+        return httpError(400, 'INVALID_JSON', 'Некорректный JSON')
+      }
+      if (room) {
+        const r = admin.putRoom(id(room), body)
+        if (!r.ok) return fail(r)
+        socket?.pushRuntime(id(room))
+        return json(200, r.value)
+      }
+      const r = admin.putGuide(id(guide!), body)
+      if (!r.ok) return fail(r)
+      r.value.touchedRooms.forEach((roomId) => socket?.pushRuntime(roomId))
+      return json(200, r.value.guide)
+    }
     return httpError(404, 'NOT_FOUND', 'Нет такого маршрута')
   }
 
@@ -895,6 +977,15 @@ export function createMockServer(
     clients: () => {
       const row = socket?.metricsRow()
       return row ? [row] : []
+    },
+    grantAdmin(username) {
+      refreshAccounts()
+      const account = accounts.get(username.trim().toLowerCase())
+      if (!account) return false
+      account.admin = true
+      touched.add(account.user.username)
+      persist()
+      return true
     },
     patchRuntime(patch) {
       const roomId = socket?.currentRoomId

@@ -26,7 +26,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `VITE_USE_MOCK` в `.env.development` (коммитится, по умолчанию `true`). Локально переключать через `.env.development.local` (игнорируется git, `*.local`), после смены — перезапустить Vite.
 
-- `true`: `src/main.ts` до старта игры динамически импортирует `src/network/mock` и подменяет `window.fetch` и `window.WebSocket`. Мок хранит аккаунты, позы и сессию в `localStorage`. В консоли есть `__mock.drop(code)` — закрыть игровой WS заданным кодом (ручная проверка переподключения).
+- `true`: `src/main.ts` до старта игры динамически импортирует `src/network/mock` и подменяет `window.fetch` и `window.WebSocket`. Мок хранит аккаунты, позы и сессию в `localStorage`. В консоли есть `__mock.drop(code)` — закрыть игровой WS заданным кодом (ручная проверка переподключения). Роль администратора (`/admin/*`): первый зарегистрированный аккаунт получает её сам, остальным — `__mock.grantAdmin('имя')`; `__mock.clients()` показывает FPS и ping так, как их видит админка.
 - `false`: прокси Vite `/api` (с WS) на `http://127.0.0.1:8080` (`vite.config.ts`). Бэкенду нужен `ALLOWED_ORIGINS` с `http://127.0.0.1:5173` и `COOKIE_SECURE=false`.
 
 Мок обязан вести себя как сервер по `api.md`: если клиент проходит на моке, он должен проходить и на сервере. Поэтому правила движения в `src/network/mock/geometry.ts` — дословный перенос серверных `ValidPose`/`Sweep` (бэкенд, `internal/domain/world/geometry.go`), а не переиспользование клиентской коллизии. Меняя поведение клиента, проверяй, что мок отвергает то же, что сервер.
@@ -47,7 +47,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `src/world/moveHistory.ts` — откатывает игрока на позицию сервера, если шаг отклонён;
 - `player.move` уходит 10 Гц со скоростью `CLIENT_SPEED_FACTOR` (90%) от максимума.
 
-**Остальное по папкам:** `scene/` — построение зала из `Room`, управление, прицел; `players/` — удалённые игроки с интерполяцией (`RENDER_DELAY_MS`); `ui/` — HTML-интерфейс (HUD, чат, панель гида, вход, карточка фото); `photo/` — съёмка кадра, сжатие до 2 МиБ, загрузка с `Idempotency-Key`.
+**Остальное по папкам:** `scene/` — построение зала из `Room`, управление, прицел; `players/` — удалённые игроки с интерполяцией (`RENDER_DELAY_MS`); `ui/` — HTML-интерфейс (HUD, чат, панель гида, вход, карточка фото); `photo/` — съёмка кадра, сжатие до 2 МиБ, загрузка с `Idempotency-Key`; `admin/` — чистая логика админки (формы гида и зала, строки таблицы клиентов, сохранение с разбором `REVISION_CONFLICT`), сама панель — `ui/adminPanel.ts`, HTTP — `network/adminApi.ts`.
 
 **Тексты для игрока** собираются через `userErrorText` (`src/ui/errorText.ts`). Технические коды (`SOCKET_CLOSED:1006`, `REQUEST_TIMEOUT` и т. п.) игроку не показываются. Длина пользовательского текста считается в кодовых точках после `trimWs` (`src/ui/text.ts`), как на сервере.
 

@@ -4,6 +4,7 @@ import { type Door, type ErrorBody, type Exhibit, type Guide } from './network/c
 import { closeAction, ReconnectLoop, type ConnectResult, type LinkState } from './network/reconnect'
 import { uuidV4 } from './network/uuid'
 import { FpsMeter, startTelemetry } from './network/telemetry'
+import { fetchAdminMe } from './network/adminApi'
 import { GameSocket } from './network/ws'
 import { canvasEncoder, copyFrame, encodeUnderLimit } from './photo/frame'
 import { photoKeyAction } from './photo/keys'
@@ -27,6 +28,7 @@ import { createControlsBar } from './ui/controlsBar'
 import { chatKeyAction, chatLineText } from './ui/chatLog'
 import { askErrorText, GuideAsks } from './ui/guideAsks'
 import { panelKeyAction } from './ui/guideKeys'
+import { createAdminPanel } from './ui/adminPanel'
 import { createGuidePanel } from './ui/guidePanel'
 import { NO_CONNECTION, NO_RESPONSE, userErrorText } from './ui/errorText'
 import { createHud } from './ui/hud'
@@ -118,7 +120,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
 
   const controls = new FirstPersonControls(renderer.domElement, (locked) => {
     const s = session
-    hud.showClickOverlay(!locked && !!s?.ready && !chat.isOpen && !guidePanel.isOpen, () => controls.lock())
+    hud.showClickOverlay(!locked && !!s?.ready && !chat.isOpen && !guidePanel.isOpen && !adminPanel.isOpen, () => controls.lock())
     if (!locked) closeCard()
   })
   controls.enabled = false
@@ -149,6 +151,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
         .catch(() => {}) // итог всё равно придёт в guide.completed или в истории при следующем открытии
     },
   })
+  const adminPanel = createAdminPanel(host, { onClose: () => resumeControls(false) })
   const guidePanel = createGuidePanel(host, {
     asks,
     loadPage: (guideId, before) => fetchGenerations(guideId, before, session?.ac.signal),
@@ -218,6 +221,21 @@ export async function startGame(host: HTMLElement): Promise<void> {
     if (lock && ready) controls.lock()
   }
 
+  /** Кнопка «Админ» видна только при GET /admin/me = 200; проверка повторяется после каждого входа в мир. */
+  async function refreshAdminButton(s: Session) {
+    const isAdmin = await fetchAdminMe()
+    if (session !== s || s.lost || s.ac.signal.aborted) return
+    hud.showAdmin(isAdmin ? openAdmin : null)
+  }
+
+  function openAdmin() {
+    controls.enabled = false
+    controls.keys.clear()
+    hud.showClickOverlay(false)
+    if (controls.locked) document.exitPointerLock()
+    adminPanel.open()
+  }
+
   function openGuide(s: Session, guide: Guide) {
     sendMove(s, true) // серверная позиция должна быть свежей, иначе у границы 3 м придёт OUT_OF_RANGE
     hud.showHint(null)
@@ -254,7 +272,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
   }
 
   function canShoot(s: Session | null): s is Session {
-    return !actionsLocked(s) && !!s!.photo && controls.locked && !cardFor && !chat.isOpen && !guidePanel.isOpen
+    return !actionsLocked(s) && !!s!.photo && controls.locked && !cardFor && !chat.isOpen && !guidePanel.isOpen && !adminPanel.isOpen
   }
 
   function downloadPhoto() {
@@ -478,7 +496,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
     const action = chatKeyAction(e.code, {
       chatOpen: chat.isOpen,
       typing: typingInField(),
-      blocked: loginScreen.visible || !!cardFor || guidePanel.isOpen || !session?.socket?.isOpen,
+      blocked: loginScreen.visible || !!cardFor || guidePanel.isOpen || adminPanel.isOpen || !session?.socket?.isOpen,
     })
     if (!action) return
     e.preventDefault()
@@ -540,6 +558,8 @@ export async function startGame(host: HTMLElement): Promise<void> {
     chat.close()
     if (!reconnecting) chat.clear()
     guidePanel.close()
+    adminPanel.close()
+    hud.showAdmin(null)
     asks.reset()
     if (session === s) session = null
     controls.enabled = false
@@ -587,7 +607,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
     s.ready = true
     s.joined = true
     s.moveTimer = setInterval(() => sendMove(s), MOVE_SEND_INTERVAL_MS)
-    const dialogOpen = chat.isOpen || guidePanel.isOpen
+    const dialogOpen = chat.isOpen || guidePanel.isOpen || adminPanel.isOpen
     controls.enabled = !dialogOpen
     if (!dialogOpen) hud.showClickOverlay(!controls.locked, () => controls.lock())
   }
@@ -806,6 +826,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
     // Связь могла оборваться, пока снималось затемнение: lose() уже запустил повторы, управление не включаем.
     if (s.lost || session !== s) return { ok: false, code: closedCode, error: new Error('SOCKET_CLOSED') }
     becomeReady(s)
+    void refreshAdminButton(s)
     return { ok: true }
   }
 
@@ -893,7 +914,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
                 ? `E — перейти: ${doorTarget.label}`
                 : null
         // Действие недоступно (фото, переход, переподключение, открытая панель) — подсказку не показываем.
-        hud.showHint(!cardFor && controls.locked && !actionsLocked(s) && !guidePanel.isOpen ? hint : null)
+        hud.showHint(!cardFor && controls.locked && !actionsLocked(s) && !guidePanel.isOpen && !adminPanel.isOpen ? hint : null)
       }
       if (s.roomId) view.update(s.players, s.roomId, now, camera)
       // Табличка — дочерний узел повёрнутой фигуры гида: мировой поворот к камере задаём через родителя.
@@ -905,7 +926,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
         label.quaternion.copy(labelParentQ.invert().multiply(camera.quaternion))
       }
     }
-    controlsBar.setVisible(!actionsLocked(s) && controls.locked && !chat.isOpen && !guidePanel.isOpen && !cardFor)
+    controlsBar.setVisible(!actionsLocked(s) && controls.locked && !chat.isOpen && !guidePanel.isOpen && !adminPanel.isOpen && !cardFor)
     renderer.render(scene, camera)
     hand.visible = !!s?.built
     hand.update(now, walkBlend)

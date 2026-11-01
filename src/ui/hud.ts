@@ -14,6 +14,8 @@ export type Hud = {
   showLoading(state: LoadingState): void
   /** Кнопка «Выйти»; null скрывает её. */
   showLogout(onClick: (() => void) | null): void
+  /** Кнопка «Админ» (только для администратора); null скрывает её. */
+  showAdmin(onClick: (() => void) | null): void
   /** Строка кеша и строка памяти; null скрывает обе. */
   showCache(state: { used: number; total: number; limit: number } | null): void
   /** Вызывается каждый кадр: DOM меняется только при изменении чисел. */
@@ -74,6 +76,12 @@ export function createHud(root: HTMLElement): Hud {
   logoutButton.textContent = 'Выйти'
   let logoutHandler: (() => void) | null = null
   logoutButton.addEventListener('click', () => logoutHandler?.())
+
+  const adminButton = el('button', 'hud-admin', root)
+  adminButton.hidden = true
+  adminButton.textContent = 'Админ'
+  let adminHandler: (() => void) | null = null
+  adminButton.addEventListener('click', () => adminHandler?.())
 
   // Баннер переподключения сверху: зал остаётся виден.
   const banner = el('div', 'hud-link-banner', root)
@@ -146,6 +154,10 @@ export function createHud(root: HTMLElement): Hud {
     showLogout(onClick) {
       logoutHandler = onClick
       logoutButton.hidden = onClick === null
+    },
+    showAdmin(onClick) {
+      adminHandler = onClick
+      adminButton.hidden = onClick === null
     },
     showCache(state) {
       cache.hidden = state === null
