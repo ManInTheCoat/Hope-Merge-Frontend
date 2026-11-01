@@ -5,9 +5,9 @@ import * as THREE from 'three'
 import type { Room, Surface } from '../src/network/contract'
 import type { SundayRoomRuntime } from '../src/network/sunday'
 import { STAND_OFFSET, STAND_SIZE } from '../src/scene/installation'
-import { lampDirection, SPOT_COLORS } from '../src/scene/lamp'
+import { lampDirection, SPOT_COLORS, SPOT_GAIN } from '../src/scene/lamp'
 import { buildRoom } from '../src/scene/roomBuilder'
-import { lightingTint, wallTint } from '../src/scene/runtimeView'
+import { createRuntimeView, lightingTint, wallTint } from '../src/scene/runtimeView'
 
 const fixture: SundayRoomRuntime = JSON.parse(
   readFileSync(join(import.meta.dir, 'fixtures', 'sunday', 'world.runtime.json'), 'utf8'),
@@ -60,7 +60,7 @@ test('лампа появляется на слоте, SpotLight по §2, на�
   const slot = fixture.config.lamp_slots.find((s) => s.slot_id === fixture.lamp.slot_id)!
   expect(lamp.position.toArray()).toEqual([slot.position.x, slot.position.y, slot.position.z])
   const spot = lamp.getObjectByProperty('isSpotLight', true) as THREE.SpotLight
-  expect(spot.intensity).toBe(3)
+  expect(spot.intensity).toBe(3 * SPOT_GAIN) // 3 из §2, усилено на клиенте, чтобы свет был виден
   expect(spot.distance).toBe(8)
   expect(spot.angle).toBeCloseTo(Math.PI / 6)
   expect(spot.penumbra).toBe(0.5)
@@ -85,10 +85,59 @@ test('лампа: on=false гасит свет, не удаляя источни
       r.lamp.slot_id = 'b'
     }),
   )
-  expect(spot.intensity).toBe(3)
+  expect(spot.intensity).toBe(3 * SPOT_GAIN) // 3 из §2, усилено на клиенте, чтобы свет был виден
   expect(`#${spot.color.getHexString()}`.toUpperCase()).toBe(SPOT_COLORS.warm)
   expect(find(b, 'lamp_01')!.position.x).toBe(9)
   expect(b.group.children.filter((o) => o.name === 'lamp_01')).toHaveLength(1)
+})
+
+test('лампа в руках: у игрока справа и на метр выше пола, головка по его yaw; пропал держатель — скрыта', () => {
+  const b = built()
+  b.runtime.apply(rt((r) => (r.lamp.holder_user_id = 'user_1')))
+  const lamp = find(b, 'lamp_01')!
+  b.runtime.setHolderPose({ x: 5, z: 6, yaw: 0 })
+  expect(lamp.visible).toBe(true)
+  expect(lamp.position.toArray()).toEqual([5.35, 1, 6])
+  const spot = lamp.getObjectByProperty('isSpotLight', true) as THREE.SpotLight
+  const dir = spot.target.getWorldPosition(new THREE.Vector3()).sub(spot.getWorldPosition(new THREE.Vector3())).normalize()
+  expect(dir.distanceTo(lampDirection(0, 0))).toBeLessThan(1e-6)
+  b.runtime.setHolderPose({ x: 5, z: 6, yaw: Math.PI / 2 })
+  expect(lamp.position.z).toBeCloseTo(5.65)
+  b.runtime.setHolderPose(null)
+  expect(lamp.visible).toBe(false)
+  // поставили: лампа снова на слоте, поза держателя больше не действует
+  b.runtime.apply(rt((r) => ((r.revision = 2), (r.lamp.holder_user_id = null))))
+  b.runtime.setHolderPose({ x: 5, z: 6, yaw: 0 })
+  expect(lamp.visible).toBe(true)
+  expect(lamp.position.x).toBe(3)
+})
+
+test('кольца мест для лампы видны, только пока лампу держит сам игрок', () => {
+  const b = built()
+  const markers = () => find(b, 'lamp_slot_markers')!
+  b.runtime.apply(fixture)
+  expect(markers().children).toHaveLength(2)
+  expect(markers().visible).toBe(false)
+  b.runtime.apply(rt((r) => ((r.revision = 2), (r.lamp.holder_user_id = 'user_1'))))
+  b.runtime.setHolderPose({ x: 5, z: 6, yaw: 0 }, false) // держит другой
+  expect(markers().visible).toBe(false)
+  b.runtime.setHolderPose({ x: 5, z: 6, yaw: 0 }, true)
+  expect(markers().visible).toBe(true)
+  b.runtime.apply(rt((r) => (r.revision = 3))) // поставили
+  expect(markers().visible).toBe(false)
+})
+
+test('лампа: пятно света на полу там, куда светит; выключенная — без луча и пятна', () => {
+  const b = built()
+  b.runtime.apply(rt((r) => Object.assign(r.lamp, { yaw: 0, head_pitch: 0 })))
+  const lamp = find(b, 'lamp_01')!
+  const pool = lamp.children[lamp.children.length - 1]
+  expect(pool.visible).toBe(true)
+  // слот (3, 0, 4), шарнир на 1,1 м, луч вниз под π/4: пятно в 1,1 м впереди по −Z
+  expect(pool.position.x).toBeCloseTo(0)
+  expect(pool.position.z).toBeCloseTo(-1.1, 1)
+  b.runtime.apply(rt((r) => ((r.revision = 2), Object.assign(r.lamp, { on: false }))))
+  expect(pool.visible).toBe(false)
 })
 
 test('лампа в руках игрока на слоте не рисуется', () => {
@@ -153,6 +202,9 @@ test('accent_color красит стены, lighting — оттенок обще
   expect(hemi.color.getHex()).toBe(lightingTint('cool').getHex())
   expect(lightingTint('neutral').getHex()).toBe(0xffffff)
   expect(lightingTint('warm').b).toBeLessThan(lightingTint('warm').r)
+  // Разница должна быть явной: заметный перекос каналов, а не пара процентов.
+  expect(lightingTint('warm').r - lightingTint('warm').b).toBeGreaterThan(0.25)
+  expect(lightingTint('cool').b - lightingTint('cool').r).toBeGreaterThan(0.2)
 })
 
 test('wallTint: с текстурой акцент разбавлен белым, неверный цвет — белый', () => {
@@ -197,4 +249,35 @@ test('dispose зала убирает лампу и стенд, повторны
   b.dispose()
   expect(b.group.children).toHaveLength(0)
   expect(() => b.runtime.dispose()).not.toThrow()
+})
+
+test('картины: без света лампы приглушены, под лучом плавно светлеют; цвет рисунка не теряется', () => {
+  const material = new THREE.MeshBasicMaterial({ color: '#808080' })
+  const base = material.color.getHex()
+  const painting = { material, position: { x: 3, y: 1.8, z: 0 }, rotation_y: Math.PI / 2 } // лицом в +X
+  const b = buildRoom(room, new Map(), labelFn)
+  const view = createRuntimeView({
+    group: new THREE.Group(),
+    bounds: room.bounds,
+    walls: [],
+    ambient: new THREE.HemisphereLight(),
+    guides: [],
+    textured: false,
+    paintings: [painting],
+  })
+  b.dispose()
+  const first = (v: THREE.Color) => v.r
+  view.update(0.1)
+  expect(first(material.color)).toBe(new THREE.Color(base).r) // runtime ещё не пришёл: картина как есть
+  // слот (3,0,4) далеко от картины в этом тесте: стоит лампа, светящая мимо
+  view.apply(rt((r) => Object.assign(r.lamp, { yaw: Math.PI, head_pitch: 0 })))
+  for (let i = 0; i < 30; i++) view.update(0.1)
+  const dim = first(material.color)
+  expect(dim).toBeLessThan(new THREE.Color(base).r)
+  // лампа смотрит на картину: из слота (3, 0, 4) к (3, 1.8, 0) вдоль −Z, лицо картины — +X, поэтому поворачиваем картину
+  painting.rotation_y = 0
+  painting.position = { x: 3, y: 1.8, z: 0 }
+  view.apply(rt((r) => ((r.revision = 2), Object.assign(r.lamp, { yaw: 0, head_pitch: -Math.PI / 3 }))))
+  for (let i = 0; i < 30; i++) view.update(0.1)
+  expect(first(material.color)).toBeGreaterThan(dim)
 })

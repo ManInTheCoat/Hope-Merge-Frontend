@@ -1,6 +1,10 @@
 import * as THREE from 'three'
 import { canvasTexture } from './canvasTexture'
-import { handPose } from './handPose'
+import { createShadeGeometry } from './lamp'
+import { HAND_BASE, handPose } from './handPose'
+
+/** Лампа в левой руке относительно камеры игрока (м). */
+const LAMP_HAND = { x: -0.19, y: -0.2, z: -0.5 }
 
 /** Размеры корпуса, м. */
 const BODY = { w: 0.13, h: 0.082, d: 0.046 }
@@ -171,6 +175,9 @@ export class HandCamera {
   private readonly camera = new THREE.PerspectiveCamera(50, 1, 0.01, 2)
   private readonly rig = new THREE.Group()
   private readonly shutter: THREE.Mesh
+  private readonly lampRig = new THREE.Group()
+  private readonly lampModel = new THREE.Group()
+  private readonly lampBulb: THREE.MeshStandardMaterial
   private shotAt: number | null = null
   visible = false
 
@@ -232,6 +239,33 @@ export class HandCamera {
     model.rotation.set(0.1, 0.3, -0.05)
     this.rig.add(model)
     this.scene.add(this.rig)
+
+    // Лампа в левой руке: ручка и раструб с линзой, смотрит вперёд-вниз, как её свет в зале.
+    const metal = new THREE.MeshStandardMaterial({ color: '#3a3a3f', roughness: 0.45, metalness: 0.5 })
+    const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.019, 0.17, 16), metal)
+    handle.position.set(0, -0.06, 0.05)
+    handle.rotation.x = -0.35
+    const shade = new THREE.Mesh(
+      createShadeGeometry(0.036, 0.062, 0.1),
+      new THREE.MeshStandardMaterial({ color: '#3a3a3f', roughness: 0.45, metalness: 0.5, side: THREE.DoubleSide }),
+    )
+    shade.position.set(0, 0.02, -0.04)
+    this.lampBulb = new THREE.MeshStandardMaterial({ color: '#fff3d6', emissive: '#fff3d6', emissiveIntensity: 1 })
+    const lampLens = new THREE.Mesh(new THREE.CircleGeometry(0.056, 24), this.lampBulb)
+    lampLens.rotation.y = Math.PI
+    lampLens.position.set(0, 0.02, -0.07)
+    this.lampModel.add(handle, shade, lampLens)
+    this.lampModel.rotation.x = -0.25
+    this.lampModel.scale.setScalar(0.65)
+    this.lampRig.add(this.lampModel)
+    this.lampRig.visible = false
+    this.scene.add(this.lampRig)
+  }
+
+  /** Лампа в руке: true — показать (включена или нет), false — убрать. */
+  setLamp(held: boolean, on: boolean): void {
+    this.lampRig.visible = held
+    this.lampBulb.emissiveIntensity = on ? 1 : 0.05
   }
 
   setAspect(aspect: number): void {
@@ -250,6 +284,8 @@ export class HandCamera {
     this.rig.position.set(p.x, p.y, p.z)
     this.rig.rotation.set(p.pitch, 0, p.roll)
     this.shutter.position.y = BODY.h / 2 + 0.015 - p.shutter * 0.003
+    // Лампа слева, фотоаппарат справа; при ходьбе лампа покачивается вместе с ним.
+    this.lampRig.position.set(LAMP_HAND.x, LAMP_HAND.y + (p.y - HAND_BASE.y) * 0.6, LAMP_HAND.z)
   }
 
   /** Второй проход поверх уже отрисованного зала. */

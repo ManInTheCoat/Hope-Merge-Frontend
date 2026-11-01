@@ -1,5 +1,5 @@
 import type { Player } from '../network/contract'
-import { SnapshotBuffer } from './interpolation'
+import { SnapshotBuffer, type Pose2 } from './interpolation'
 
 export type RemotePlayer = {
   userId: string
@@ -56,6 +56,11 @@ export class PlayerRegistry {
 
   visible(roomId: string): RemotePlayer[] {
     return [...this.players.values()].filter((p) => p.roomId === roomId)
+  }
+
+  /** Интерполированная поза игрока в момент `renderTime` или null, если его нет или данных нет. */
+  poseOf(userId: string, renderTime: number): Pose2 | null {
+    return this.players.get(userId)?.buffer.sample(renderTime) ?? null
   }
 
   colorOf(userId: string): string | null {

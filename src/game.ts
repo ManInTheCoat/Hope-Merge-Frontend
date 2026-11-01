@@ -22,7 +22,23 @@ import { FirstPersonControls, typingInField } from './scene/controls'
 import { CLIENT_SPEED_FACTOR, moveSendBudget, moveVector, shouldSendMove } from './scene/input'
 import { HandCamera } from './scene/handCamera'
 import { buildRoom } from './scene/roomBuilder'
-import { pickDoor, pickTarget, type Target } from './scene/targeting'
+import { pickDoor, pickTargetT, type Target } from './scene/targeting'
+import {
+  HELD_HINT,
+  heldAim,
+  type HeldPose,
+  holdsLamp,
+  keyAct,
+  lampErrorText,
+  lampHint,
+  pickLamp,
+  placeAct,
+  takeAct,
+  type LampTarget,
+} from './lamp/lampActions'
+import type { SundayObjectAct, SundayRoomRuntime } from './network/sunday'
+import { RENDER_DELAY_MS } from './players/interpolation'
+import { guideActionDoneText, guideActionErrorText } from './ui/guideAction'
 import { createChat } from './ui/chat'
 import { createControlsBar } from './ui/controlsBar'
 import { chatKeyAction, chatLineText } from './ui/chatLog'
@@ -49,6 +65,14 @@ const CHAT_SEND_TIMEOUT_MS = 10_000
 /** Без guide.accepted или error за это время проверяем вопрос по request_id. */
 const ASK_ACCEPT_TIMEOUT_MS = 10_000
 const GUIDE_CANCEL_TIMEOUT_MS = 10_000
+/** Команда лампе или просьба гиду без ответа за это время считается потерянной. */
+const SUNDAY_REQUEST_TIMEOUT_MS = 10_000
+/**
+ * Поворот головки копится и уходит одной командой после паузы: сервер пускает 10 команд лампе за 10 с,
+ * а каждое нажатие — это шаг в 15°. Между командами лампе не меньше LAMP_MIN_GAP_MS.
+ */
+const AIM_DEBOUNCE_MS = 350
+const LAMP_MIN_GAP_MS = 1100
 /** Без world.entered за это время считаем подтверждение потерянным и переподключаемся (api.md, «Переход»). */
 const ENTER_TIMEOUT_MS = 10_000
 /** Аномальное закрытие (1006): так считаем потерю связи, обнаруженную самим клиентом. */
@@ -107,6 +131,10 @@ export async function startGame(host: HTMLElement): Promise<void> {
   let cardToken = 0
   let target: Target = null
   let doorTarget: Door | null = null
+  let lampTarget: LampTarget | null = null
+  let aimPending: { yaw: number; head_pitch: number } | null = null
+  let aimTimer: ReturnType<typeof setTimeout> | null = null
+  let lastLampSentAt = -Infinity
 
   const view = new RemotePlayersView(scene)
   /** Модели персонажей грузятся параллельно со входом; до загрузки (или при ошибке) — капсулы. */
@@ -166,6 +194,26 @@ export async function startGame(host: HTMLElement): Promise<void> {
       asks.start({ requestId, guideId: guide.id, guideName: guide.display_name, question: text })
       setTimeout(() => void recoverAsk(s, guide.id, requestId), ASK_ACCEPT_TIMEOUT_MS)
       return null
+    },
+    canAct: () => !!session && hasSunday(session.manifest),
+    async onAct(guide, text) {
+      const s = session
+      const rt = s?.sync.current
+      if (!s?.ready || !s.socket?.isOpen || !rt || !hasSunday(s.manifest)) throw new Error(NO_CONNECTION)
+      sendMove(s, true) // сервер меряет расстояние до гида по своей позиции
+      try {
+        const done = await s.socket.request(
+          'guide.action',
+          { guide_id: guide.id, text, movement_epoch: s.epoch, expected_revision: rt.revision },
+          'guide.action.completed',
+          SUNDAY_REQUEST_TIMEOUT_MS,
+        )
+        // Отправитель получает полный runtime только в ответе (остальным уходит world.runtime).
+        if (session === s && s.sync.accept(done.runtime)) applyRuntime(s)
+        return guideActionDoneText(done.effect)
+      } catch (e) {
+        throw new Error(guideActionErrorText(e))
+      }
     },
     async onCancel() {
       const socket = session?.socket
@@ -571,6 +619,9 @@ export async function startGame(host: HTMLElement): Promise<void> {
     hud.showClickOverlay(false)
     target = null
     doorTarget = null
+    lampTarget = null
+    resetAim(null)
+    hand.setLamp(false, true)
   }
 
   function showRoom(s: Session, loaded: LoadedRoom) {
@@ -616,6 +667,97 @@ export async function startGame(host: HTMLElement): Promise<void> {
     s.guides = mergeGuides(s.guides, rt)
   }
 
+  /**
+   * Команда лампе (api-sunday.md §4). Одна за раз: expected_revision берётся из последнего принятого runtime,
+   * поэтому следующая команда ждёт ответа предыдущей. Отправитель применяет runtime из ответа.
+   */
+  async function actLamp(s: Session, build: (rt: SundayRoomRuntime) => SundayObjectAct | null): Promise<boolean> {
+    const rt = s.sync.current
+    if (s.lampBusy || actionsLocked(s) || !s.socket?.isOpen || !rt || !hasSunday(s.manifest)) return false
+    const act = build(rt)
+    if (!act) return false
+    s.lampBusy = true
+    lastLampSentAt = performance.now()
+    sendMove(s, true) // сервер меряет расстояние до места по своей позиции
+    try {
+      const done = await s.socket.request('object.act', act, 'object.acted', SUNDAY_REQUEST_TIMEOUT_MS)
+      if (session === s && s.sync.accept(done.runtime)) applyRuntime(s)
+      return true
+    } catch (e) {
+      if (session === s) hud.showMessage(lampErrorText(e))
+      return false
+    } finally {
+      s.lampBusy = false
+    }
+  }
+
+  /** E у лампы — взять, у слота с лампой в руках — поставить. */
+  function interactLamp(s: Session, t: LampTarget) {
+    const ctx = () => ({ movementEpoch: s.epoch, revision: s.sync.current?.revision ?? 0 })
+    if (t.kind === 'lamp') return void actLamp(s, () => takeAct(ctx()))
+    // Лампа встаёт со слота с тем направлением, куда игрок смотрел: сразу показываем его и сохраняем командой aim.
+    const aim = heldAim(controls.yaw, controls.pitch)
+    void actLamp(s, () => placeAct(ctx(), t.slotId)).then((placed) => {
+      if (!placed || session !== s) return
+      aimPending = aim
+      s.built?.runtime.setLampPreview(aim)
+      scheduleAim(s, AIM_DEBOUNCE_MS)
+    })
+  }
+
+  /** Сбрасывает накопленный, но не отправленный поворот головки и его предпросмотр. */
+  function resetAim(s: Session | null) {
+    if (aimTimer) clearTimeout(aimTimer)
+    aimTimer = null
+    aimPending = null
+    s?.built?.runtime.setLampPreview(null)
+  }
+
+  function scheduleAim(s: Session, minDelayMs: number) {
+    if (aimTimer) clearTimeout(aimTimer)
+    const wait = lastLampSentAt + LAMP_MIN_GAP_MS - performance.now()
+    aimTimer = setTimeout(() => void flushAim(s), Math.max(minDelayMs, wait))
+  }
+
+  async function flushAim(s: Session) {
+    aimTimer = null
+    const sent = aimPending
+    if (!sent || session !== s) return
+    if (s.lampBusy) return scheduleAim(s, 150)
+    if (actionsLocked(s) || s.sync.current?.lamp.holder_user_id !== null) return resetAim(s)
+    await actLamp(s, (rt) => ({
+      object_id: 'lamp_01',
+      movement_epoch: s.epoch,
+      expected_revision: rt.revision,
+      action: 'aim',
+      yaw: sent.yaw,
+      head_pitch: sent.head_pitch,
+    }))
+    if (session !== s) return
+    // Ответ уже применён (или отказ вернул прежний угол); если за это время повернули ещё — ждём следующей отправки.
+    if (aimPending === sent) aimPending = null
+    s.built?.runtime.setLampPreview(aimPending)
+  }
+
+  /** Q — вкл/выкл, Z/X — поворот, C/V — наклон головки: только для стоящей лампы, на которую смотрит игрок. */
+  function lampKey(code: string, repeat: boolean) {
+    const s = session
+    const rt = s?.sync.current
+    if (!s || !rt || lampTarget?.kind !== 'lamp' || rt.lamp.holder_user_id !== null) return
+    const ctx = { movementEpoch: s.epoch, revision: rt.revision }
+    if (code === 'KeyQ') {
+      if (!repeat) void actLamp(s, () => keyAct(code, rt.lamp, ctx))
+      return
+    }
+    const next = keyAct(code, { ...rt.lamp, ...aimPending }, ctx)
+    if (next?.action !== 'aim') return
+    const same = next.yaw === (aimPending ?? rt.lamp).yaw && next.head_pitch === (aimPending ?? rt.lamp).head_pitch
+    if (same) return // упёрлись в предел наклона
+    aimPending = { yaw: next.yaw, head_pitch: next.head_pitch }
+    s.built?.runtime.setLampPreview(aimPending)
+    scheduleAim(s, AIM_DEBOUNCE_MS)
+  }
+
   /** Перечитывает состояние зала (api-sunday.md §1): ответ придёт обычным world.runtime с этим request_id. */
   function requestRoomSync(s: Session) {
     if (!hasSunday(s.manifest) || !s.socket || s.lost) return
@@ -643,6 +785,8 @@ export async function startGame(host: HTMLElement): Promise<void> {
     hud.showHint(null)
     target = null
     doorTarget = null
+    lampTarget = null
+    resetAim(s)
   }
 
   async function enterDoor(s: Session, door: Door): Promise<void> {
@@ -878,6 +1022,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
     const s = session
     if (!s?.ready || !s.socket || !controls.locked) return
     if (!target) {
+      if (lampTarget) return interactLamp(s, lampTarget)
       if (doorTarget) void enterDoor(s, doorTarget)
       return
     }
@@ -899,6 +1044,16 @@ export async function startGame(host: HTMLElement): Promise<void> {
       if (cardToken === token) closeCard()
       hud.showMessage(userErrorText(e))
     }
+  }
+
+  controls.onLampKey = lampKey
+
+  /** Поза игрока, несущего лампу: своя — по камере, чужая — по интерполяции; null, если лампу никто не несёт. */
+  function holderPose(s: Session, now: number): HeldPose | null {
+    const holder = s.sync.current?.lamp.holder_user_id
+    if (!holder) return null
+    if (holder === s.selfId) return { x: s.pos.x, z: s.pos.z, yaw: controls.yaw, pitch: controls.pitch }
+    return s.players.poseOf(holder, now - RENDER_DELAY_MS)
   }
 
   const dir = new THREE.Vector3()
@@ -937,26 +1092,38 @@ export async function startGame(host: HTMLElement): Promise<void> {
 
       if (s.ready) {
         camera.getWorldDirection(dir)
-        target = cardFor
-          ? null
-          : pickTarget({ eye: camera.position, dir, colliders: s.built.colliders, rangeFrom: s.path.sent }, s.exhibits, s.guides)
-        // Экспонат или гид в прицеле важнее двери рядом. Расстояние — от позиции, которую уже знает сервер:
+        const look = { eye: camera.position, dir, colliders: s.built.colliders, rangeFrom: s.path.sent }
+        const hit = cardFor ? { target: null, t: Infinity } : pickTargetT(look, s.exhibits, s.guides)
+        const rt = s.sync.current
+        const lampHit = !cardFor && rt && hasSunday(s.manifest) ? pickLamp(look, rt, s.selfId) : null
+        // Лампа ближе картины или гида по лучу — выбираем её.
+        const lampWins = !!lampHit && lampHit.t < hit.t
+        target = lampWins ? null : hit.target
+        lampTarget = lampWins ? lampHit!.target : null
+        // Предмет в прицеле важнее двери рядом. Расстояние — от позиции, которую уже знает сервер:
         // подсказка появляется, только когда он примет действие.
-        doorTarget = cardFor || target ? null : pickDoor(s.path.sent, s.doors, s.built.colliders)
+        doorTarget = cardFor || target || lampTarget ? null : pickDoor(s.path.sent, s.doors, s.built.colliders)
+        const heldByMe = holdsLamp(rt, s.selfId)
         const hint =
           target?.kind === 'exhibit'
             ? `E — осмотреть: ${target.exhibit.title}`
             : target?.kind === 'guide'
               ? `E — поговорить: ${target.guide.display_name}`
-              : doorTarget
-                ? `E — перейти: ${doorTarget.label}`
-                : null
+              : lampTarget
+                ? lampHint(lampTarget)
+                : doorTarget
+                  ? `E — перейти: ${doorTarget.label}`
+                  : heldByMe
+                    ? HELD_HINT
+                    : null
         // Действие недоступно (фото, переход, переподключение, открытая панель) — подсказку не показываем.
         hud.showHint(!cardFor && controls.locked && !actionsLocked(s) && !guidePanel.isOpen && !adminPanel.isOpen ? hint : null)
       }
       if (s.roomId) view.update(s.players, s.roomId, now, camera)
       // Табличка — дочерний узел повёрнутой фигуры гида: мировой поворот к камере задаём через родителя.
       s.built.runtime.update(dt)
+      s.built.runtime.setHolderPose(holderPose(s, now), s.sync.current?.lamp.holder_user_id === s.selfId)
+      hand.setLamp(holdsLamp(s.sync.current, s.selfId), s.sync.current?.lamp.on ?? true)
       // Посетители: позы нужны и для реплики «пропустите». Она только пока игра готова и ничто не перекрывает экран.
       const poses = s.crowd?.update(dt, now, s.ready ? s.path.sent : null) ?? []
       const asked = s.passRequest.update(now, s.ready ? s.path.sent : null, poses)

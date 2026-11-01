@@ -2,15 +2,28 @@ import * as THREE from 'three'
 import type { Room } from '../network/contract'
 import type { SundayConfigLighting, SundayRoomRuntime } from '../network/sunday'
 import { createInstallation, STAND_OFFSET, type InstallationView } from './installation'
-import { createLamp, SPOT_COLORS, type LampView } from './lamp'
+import { paintingLight } from '../lamp/illumination'
+import { BEAM_COLORS, createLamp, type LampView } from './lamp'
+import { heldAim, heldPosition, type HeldPose } from '../lamp/lampActions'
 import type { GuideActor } from './roomBuilder'
 
 /** Живое состояние зала по `world.runtime`: отделка, свет, гиды, стенд и лампа. Принадлежит построенному залу. */
 export type RuntimeView = {
   /** Применяет полный снимок: идемпотентно, лишнего не пересоздаёт. */
   apply(runtime: SundayRoomRuntime): void
+  /** Где сейчас держащий лампу (каждый кадр); null — его нет в зале, лампа скрыта. Без держателя не действует. */
+  setHolderPose(pose: HeldPose | null, own?: boolean): void
+  /** Ещё не отправленный поворот головки: показываем сразу, не дожидаясь ответа сервера. null — убрать. */
+  setLampPreview(aim: { yaw: number; head_pitch: number } | null): void
   update(dtS: number): void
   dispose(): void
+}
+
+/** Картина зала: её материал не зависит от света, поэтому подсветку лампой рисуем через его цвет. */
+export type PaintingView = {
+  material: THREE.MeshBasicMaterial
+  position: { x: number; y: number; z: number }
+  rotation_y: number
 }
 
 export type RuntimeViewParts = {
@@ -20,18 +33,35 @@ export type RuntimeViewParts = {
   walls: THREE.Mesh[]
   /** Общий свет, чей оттенок задаёт `lighting`. */
   ambient: THREE.HemisphereLight
+  /** Основной направленный свет галереи: тонируется вместе с общим, иначе пол и стены почти не меняются. */
+  sun?: THREE.DirectionalLight
+  /** Картины зала: без освещения лампой они чуть приглушены, под лучом светлеют и теплеют. */
+  paintings?: PaintingView[]
   guides: GuideActor[]
   /** Стены с текстурой штукатурки: цвет умножается на неё, поэтому акцент разбавляется белым. */
   textured: boolean
 }
 
-/** Доля оттенка `lighting` в цвете общего света: заметно, но не заливает картины. */
-const AMBIENT_TINT = 0.45
+/**
+ * Оттенок общего света для `lighting`: насыщеннее цвета SpotLight, потому что именно общий свет (небо, пол, солнце)
+ * определяет, как выглядит зал, и тёплый или холодный зал должен читаться с первого взгляда.
+ */
+const LIGHT_TINT: Record<SundayConfigLighting, string> = { neutral: '#ffffff', warm: '#ffb066', cool: '#8ab8ff' }
+/** Яркость картины без света лампы и под лучом (1 — как нарисована); картины ярче 1 не бывает, она уже на пределе. */
+const PAINTING_DIM = 0.72
+const PAINTING_LIT = 1
+/** Насколько цвет луча окрашивает картину под ним. */
+const PAINTING_TINT = 0.4
+/** Скорость сглаживания подсветки, 1/с: луч не должен «щёлкать» картину при повороте. */
+const PAINTING_EASE = 8
+
+/** Доля оттенка в цвете общего света: заметно, но картины не окрашиваются целиком (у них свой неосвещаемый материал). */
+const AMBIENT_TINT = 0.8
 /** Доля акцента в цвете стены с текстурой: иначе стены темнеют, а штукатурка пропадает. */
 const TEXTURED_ACCENT = 0.5
 
 export function lightingTint(lighting: SundayConfigLighting): THREE.Color {
-  return new THREE.Color('#ffffff').lerp(new THREE.Color(SPOT_COLORS[lighting]), AMBIENT_TINT)
+  return new THREE.Color('#ffffff').lerp(new THREE.Color(LIGHT_TINT[lighting]), AMBIENT_TINT)
 }
 
 export function wallTint(accent: string, textured: boolean): THREE.Color {
@@ -45,10 +75,75 @@ export function wallTint(accent: string, textured: boolean): THREE.Color {
 }
 
 export function createRuntimeView(parts: RuntimeViewParts): RuntimeView {
-  const { group, bounds, walls, ambient, guides, textured } = parts
+  const { group, bounds, walls, ambient, guides, textured, sun, paintings = [] } = parts
+  const paintLevel = paintings.map(() => 0)
+  const paintColor = new THREE.Color()
+  const paintTint = new THREE.Color()
+  const paintTmp = new THREE.Color()
+  const paintBase = paintings.map((p) => p.material.color.clone())
+  const baseSky = ambient.color.clone()
+  const baseGround = ambient.groundColor.clone()
+  const baseSun = sun?.color.clone()
   let lamp: LampView | null = null
   let stand: InstallationView | null = null
   const guideSeen = new Map<string, string>()
+  let held = false
+  let heldPose: HeldPose | null = null
+  let ownHeld = false
+  let preview: { yaw: number; head_pitch: number } | null = null
+  let lastRt: SundayRoomRuntime | null = null
+
+  // Метки мест для лампы: кольца на полу видны, только пока лампа в руках у самого игрока.
+  const markerGeometry = new THREE.RingGeometry(0.34, 0.44, 40)
+  const markerMaterial = new THREE.MeshBasicMaterial({ color: '#ffe9a8', transparent: true, opacity: 0.8, side: THREE.DoubleSide, depthWrite: false })
+  const markers = new THREE.Group()
+  markers.name = 'lamp_slot_markers'
+  markers.visible = false
+  group.add(markers)
+  let markerKey = ''
+  let markerT = 0
+
+  function syncMarkers(rt: SundayRoomRuntime) {
+    const key = rt.config.lamp_slots.map((sl) => `${sl.slot_id}:${sl.position.x}:${sl.position.z}`).join('|')
+    if (key !== markerKey) {
+      markerKey = key
+      markers.clear()
+      for (const sl of rt.config.lamp_slots) {
+        const ring = new THREE.Mesh(markerGeometry, markerMaterial)
+        ring.rotation.x = -Math.PI / 2
+        ring.position.set(sl.position.x, 0.03, sl.position.z)
+        markers.add(ring)
+      }
+    }
+    markers.visible = ownHeld && rt.lamp.holder_user_id !== null
+  }
+
+  function applyLamp(rt: SundayRoomRuntime) {
+    const slot = rt.config.lamp_slots.find((s) => s.slot_id === rt.lamp.slot_id)
+    if (!slot) return
+    if (!lamp) {
+      lamp = createLamp()
+      group.add(lamp.object)
+    }
+    lamp.apply(preview && rt.lamp.holder_user_id === null ? { ...rt.lamp, ...preview } : rt.lamp, slot.position, rt.config.lighting)
+    held = rt.lamp.holder_user_id !== null
+    lamp.object.visible = true
+    placeHeld()
+    syncMarkers(rt)
+  }
+
+  /** Лампа в руках стоит у игрока, иначе на своём слоте (его положение apply() уже задал). */
+  function placeHeld() {
+    if (!lamp) return
+    if (!held) return lamp.setModelVisible(true)
+    lamp.object.visible = heldPose !== null
+    // Свою лампу игрок видит в руке (оверлей): в мире остаётся только её свет.
+    lamp.setModelVisible(!ownHeld)
+    if (heldPose) {
+      const pitch = heldPose.pitch === undefined ? 0 : heldAim(heldPose.yaw, heldPose.pitch).head_pitch
+      lamp.carry(heldPosition(heldPose), heldPose.yaw, pitch)
+    }
+  }
 
   return {
     apply(rt) {
@@ -57,7 +152,10 @@ export function createRuntimeView(parts: RuntimeViewParts): RuntimeView {
       const tint = wallTint(config.accent_color, textured)
       for (const w of walls) (w.material as THREE.MeshStandardMaterial).color.copy(tint)
 
-      ambient.color.copy(lightingTint(config.lighting))
+      const tone = lightingTint(config.lighting)
+      ambient.color.copy(baseSky).multiply(tone)
+      ambient.groundColor.copy(baseGround).multiply(tone)
+      if (sun && baseSun) sun.color.copy(baseSun).multiply(tone)
 
       for (const g of rt.guides) {
         const actor = guides.find((a) => a.id === g.guide_id)
@@ -78,21 +176,43 @@ export function createRuntimeView(parts: RuntimeViewParts): RuntimeView {
       }
       if (stand) stand.object.visible = config.installation_visible
 
-      const slot = config.lamp_slots.find((s) => s.slot_id === rt.lamp.slot_id)
-      if (slot) {
-        if (!lamp) {
-          lamp = createLamp()
-          group.add(lamp.object)
-        }
-        lamp.apply(rt.lamp, slot.position, config.lighting)
-        // Лампу в руках игрока показывает отдельная логика переноса; на слоте её в этот момент нет.
-        lamp.object.visible = rt.lamp.holder_user_id === null
-      }
+      lastRt = rt
+      applyLamp(rt)
+    },
+    setHolderPose(pose, own = false) {
+      heldPose = pose
+      ownHeld = own
+      placeHeld()
+      if (lastRt) markers.visible = ownHeld && lastRt.lamp.holder_user_id !== null
+    },
+    setLampPreview(aim) {
+      preview = aim
+      if (lastRt) applyLamp(lastRt)
     },
     update(dtS) {
+      if (paintings.length && lastRt) {
+        const beam = lamp?.beam()
+        paintTint.set(BEAM_COLORS[lastRt.config.lighting])
+        paintings.forEach((p, i) => {
+          const target = beam ? paintingLight(beam, p) : 0
+          paintLevel[i] += (target - paintLevel[i]) * Math.min(1, dtS * PAINTING_EASE)
+          const level = paintLevel[i]
+          const base = PAINTING_DIM + (PAINTING_LIT - PAINTING_DIM) * level
+          // Цвет рисунка не трогаем: множитель яркости, слегка окрашенный лучом.
+          paintColor.setRGB(base, base, base).lerp(paintTmp.copy(paintTint).multiplyScalar(base), PAINTING_TINT * level)
+          p.material.color.copy(paintBase[i]).multiply(paintColor)
+        })
+      }
+      if (markers.visible) {
+        markerT += dtS
+        markerMaterial.opacity = 0.55 + 0.3 * Math.sin(markerT * 4)
+      }
       if (stand?.object.visible) stand.update(dtS)
     },
     dispose() {
+      markers.removeFromParent()
+      markerGeometry.dispose()
+      markerMaterial.dispose()
       lamp?.object.removeFromParent()
       stand?.object.removeFromParent()
       lamp?.dispose()

@@ -31,7 +31,7 @@ function segmentHitsBox(a: Vec3, b: Vec3, box: Aabb): boolean {
 }
 
 /** `rangeFrom` — позиция, которую знает сервер: от неё он меряет радиус взаимодействия. По умолчанию — камера. */
-type LookInput = { eye: Vec3; dir: Vec3; colliders?: Aabb[]; rangeFrom?: Vec2 }
+export type LookInput = { eye: Vec3; dir: Vec3; colliders?: Aabb[]; rangeFrom?: Vec2 }
 
 /** Радиус и высота цилиндра, в который должен попасть взгляд, чтобы выбрать гида. */
 const GUIDE_HIT_RADIUS_M = 0.4
@@ -64,19 +64,29 @@ function exhibitHitT(input: LookInput, e: Exhibit, hintRadiusM: number): number 
   return t
 }
 
-/** Расстояние по лучу до входа в цилиндр гида или null (дальше радиуса, мимо, за стеной). */
-function guideHitT(input: LookInput, g: Guide, hintRadiusM: number): number | null {
+/**
+ * Расстояние по лучу до входа в вертикальный цилиндр с основанием в `pos` или null (дальше радиуса, мимо, за стеной).
+ * Видимость проверяется отрезком от глаз до точки на высоте `losY` над основанием.
+ */
+export function cylinderHitT(
+  input: LookInput,
+  pos: Vec3,
+  radiusM: number,
+  heightM: number,
+  losY: number,
+  hintRadiusM: number,
+): number | null {
   const { eye, dir } = input
   const from = input.rangeFrom ?? eye
-  if (Math.hypot(g.position.x - from.x, g.position.z - from.z) > hintRadiusM) return null
+  if (Math.hypot(pos.x - from.x, pos.z - from.z) > hintRadiusM) return null
 
   // |(eye + dir·t − p)_xz|² = r²
-  const ox = eye.x - g.position.x
-  const oz = eye.z - g.position.z
+  const ox = eye.x - pos.x
+  const oz = eye.z - pos.z
   const a = dir.x * dir.x + dir.z * dir.z
   if (a === 0) return null
   const b = 2 * (ox * dir.x + oz * dir.z)
-  const c = ox * ox + oz * oz - GUIDE_HIT_RADIUS_M * GUIDE_HIT_RADIUS_M
+  const c = ox * ox + oz * oz - radiusM * radiusM
   const disc = b * b - 4 * a * c
   if (disc < 0) return null
   const sq = Math.sqrt(disc)
@@ -85,15 +95,27 @@ function guideHitT(input: LookInput, g: Guide, hintRadiusM: number): number | nu
   if (t <= 0) return null
 
   const y = eye.y + dir.y * t
-  if (y < g.position.y || y > g.position.y + GUIDE_HIT_HEIGHT_M) return null
-  const head = { x: g.position.x, y: g.position.y + GUIDE_EYE_HEIGHT_M, z: g.position.z }
-  if (input.colliders?.some((box) => segmentHitsBox(eye, head, box))) return null
+  if (y < pos.y || y > pos.y + heightM) return null
+  const point = { x: pos.x, y: pos.y + losY, z: pos.z }
+  if (input.colliders?.some((box) => segmentHitsBox(eye, point, box))) return null
   return t
 }
 
+/** Отрезок от глаз до точки не проходит сквозь блок. */
+export function sightClear(input: LookInput, point: Vec3): boolean {
+  return !input.colliders?.some((box) => segmentHitsBox(input.eye, point, box))
+}
 
-/** Картина или гид под взглядом; при попадании в обоих выигрывает ближний по лучу. */
-export function pickTarget(input: LookInput, exhibits: Exhibit[], guides: Guide[], hintRadiusM: number = HINT_RADIUS_M): Target {
+const guideHitT = (input: LookInput, g: Guide, hintRadiusM: number) =>
+  cylinderHitT(input, g.position, GUIDE_HIT_RADIUS_M, GUIDE_HIT_HEIGHT_M, GUIDE_EYE_HEIGHT_M, hintRadiusM)
+
+/** Картина или гид под взглядом и расстояние до него по лучу; при попадании в обоих выигрывает ближний. */
+export function pickTargetT(
+  input: LookInput,
+  exhibits: Exhibit[],
+  guides: Guide[],
+  hintRadiusM: number = HINT_RADIUS_M,
+): { target: Target; t: number } {
   let best: Target = null
   let bestT = Infinity
   for (const exhibit of exhibits) {
@@ -110,8 +132,12 @@ export function pickTarget(input: LookInput, exhibits: Exhibit[], guides: Guide[
       bestT = t
     }
   }
-  return best
+  return { target: best, t: bestT }
 }
+
+/** Картина или гид под взглядом; при попадании в обоих выигрывает ближний по лучу. */
+export const pickTarget = (input: LookInput, exhibits: Exhibit[], guides: Guide[], hintRadiusM: number = HINT_RADIUS_M): Target =>
+  pickTargetT(input, exhibits, guides, hintRadiusM).target
 
 /** Высота глаз над позицией игрока (api.md §1): от неё сервер проверяет видимость двери. */
 const EYE_HEIGHT_M = 1.65
