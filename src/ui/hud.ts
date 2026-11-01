@@ -1,4 +1,6 @@
 import { formatCache, formatMemory } from './cacheFormat'
+import type { LinkView } from './linkView'
+import { el } from './dom'
 
 export type ExhibitCard = { title: string; description: string; image: ImageBitmap | null }
 
@@ -13,7 +15,7 @@ export type Hud = {
   /** Кнопка «Выйти»; null скрывает её. */
   showLogout(onClick: (() => void) | null): void
   /** Строка кеша и строка памяти; null скрывает обе. */
-  showCache(state: { used: number; limit: number } | null): void
+  showCache(state: { used: number; total: number; limit: number } | null): void
   /** Вызывается каждый кадр: DOM меняется только при изменении чисел. */
   showMemory(textures: number, geometries: number): void
   /** Затемнение на время перехода; промис — когда анимация закончилась. */
@@ -21,21 +23,17 @@ export type Hud = {
   fadeText(text: string | null): void
   /** Вспышка фотоаппарата. */
   flash(): void
+  /** Состояние соединения: баннер поверх зала или экран без автоповторов. */
+  showLink(view: LinkView, actions: LinkActions): void
 }
+
+export type LinkActions = { retryNow(): void; enterWorld(): void; reload(): void }
 
 const FADE_MS = 200
 const FADE_FALLBACK_MS = 250
 
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, parent: HTMLElement): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag)
-  node.className = cls
-  parent.appendChild(node)
-  return node
-}
-
 export function createHud(root: HTMLElement): Hud {
-  const crosshair = el('div', 'hud-crosshair', root)
-  crosshair.hidden = false
+  el('div', 'hud-crosshair', root)
   const hint = el('div', 'hud-hint', root)
   hint.hidden = true
   const message = el('div', 'hud-message', root)
@@ -76,6 +74,22 @@ export function createHud(root: HTMLElement): Hud {
   logoutButton.textContent = 'Выйти'
   let logoutHandler: (() => void) | null = null
   logoutButton.addEventListener('click', () => logoutHandler?.())
+
+  // Баннер переподключения сверху: зал остаётся виден.
+  const banner = el('div', 'hud-link-banner', root)
+  banner.hidden = true
+  const bannerText = el('span', 'hud-link-banner-text', banner)
+  const bannerRetry = el('button', 'hud-link-banner-retry', banner)
+  bannerRetry.textContent = 'Повторить сейчас'
+  // Экран без автоповторов (другая вкладка, старый клиент, закрытое соединение).
+  const linkScreen = el('div', 'hud-loading', root)
+  linkScreen.hidden = true
+  const linkScreenText = el('div', 'hud-loading-text', linkScreen)
+  const linkScreenButton = el('button', 'hud-loading-retry', linkScreen)
+  let linkActions: LinkActions | null = null
+  let linkButton: 'enter' | 'reload' | null = null
+  bannerRetry.addEventListener('click', () => linkActions?.retryNow())
+  linkScreenButton.addEventListener('click', () => (linkButton === 'reload' ? linkActions?.reload() : linkActions?.enterWorld()))
 
   // Строка кеша поверх экрана загрузки: видно, как бюджет растёт при загрузке зала.
   const cache = el('div', 'hud-cache', root)
@@ -139,7 +153,7 @@ export function createHud(root: HTMLElement): Hud {
         memoryKey = ''
         return
       }
-      cacheLine.textContent = formatCache(state.used, state.limit)
+      cacheLine.textContent = formatCache(state.used, state.total, state.limit)
       cache.classList.toggle('hud-cache--over', state.used > state.limit)
     },
     showMemory(textures, geometries) {
@@ -166,6 +180,20 @@ export function createHud(root: HTMLElement): Hud {
       flashLayer.classList.remove('hud-flash--on')
       void flashLayer.offsetWidth // перезапуск анимации при частых снимках
       flashLayer.classList.add('hud-flash--on')
+    },
+    showLink(view, actions) {
+      linkActions = actions
+      banner.hidden = view.banner === null
+      if (view.banner) {
+        bannerText.textContent = view.banner.text
+        bannerRetry.hidden = !view.banner.retry
+      }
+      linkScreen.hidden = view.screen === null
+      linkButton = view.screen?.button ?? null
+      if (view.screen) {
+        linkScreenText.textContent = view.screen.text
+        linkScreenButton.textContent = view.screen.button === 'reload' ? 'Обновить' : 'Войти в мир'
+      }
     },
     fadeText(text) {
       fadeLabel.hidden = text === null

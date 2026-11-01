@@ -1,18 +1,14 @@
 import * as THREE from 'three'
+import { canvasTexture } from './canvasTexture'
 import { handPose } from './handPose'
 
 /** Размеры корпуса, м. */
 const BODY = { w: 0.13, h: 0.082, d: 0.046 }
 
-function canvasTexture(width: number, height: number, draw: (ctx: CanvasRenderingContext2D) => void): THREE.CanvasTexture {
-  const canvas = document.createElement('canvas')
-  canvas.width = width
-  canvas.height = height
-  draw(canvas.getContext('2d')!)
-  const texture = new THREE.CanvasTexture(canvas)
-  texture.colorSpace = THREE.SRGBColorSpace
-  texture.anisotropy = 4
-  return texture
+function texture(width: number, height: number, draw: (ctx: CanvasRenderingContext2D) => void): THREE.CanvasTexture {
+  const t = canvasTexture(width, height, draw)
+  t.anisotropy = 4
+  return t
 }
 
 /** Повторяемое зерно, чтобы текстуры были одинаковыми при каждом запуске. */
@@ -40,14 +36,14 @@ function drawLeather(ctx: CanvasRenderingContext2D, w: number, h: number) {
 }
 
 /** Кожзам по бокам и спереди. */
-const leatherTexture = () => canvasTexture(256, 256, (ctx) => drawLeather(ctx, 256, 256))
+const leatherTexture = () => texture(256, 256, (ctx) => drawLeather(ctx, 256, 256))
 
 /**
  * Задняя панель: кожзам с декоративным «экраном». Экран не настоящий: стекло с градиентом, бликом,
  * сеткой третей и парой значков, без изображения с камеры.
  */
 const backTexture = () =>
-  canvasTexture(512, 324, (ctx) => {
+  texture(512, 324, (ctx) => {
     const W = 512
     const H = 324
     drawLeather(ctx, W, H)
@@ -140,7 +136,7 @@ const backTexture = () =>
 
 /** Насечка на кольце объектива. */
 const knurlTexture = () =>
-  canvasTexture(256, 32, (ctx) => {
+  texture(256, 32, (ctx) => {
     ctx.fillStyle = '#2b2b2f'
     ctx.fillRect(0, 0, 256, 32)
     ctx.fillStyle = '#121214'
@@ -149,7 +145,7 @@ const knurlTexture = () =>
 
 /** Стекло объектива: тёмные кольца с цветным отблеском просветления. */
 const glassTexture = () =>
-  canvasTexture(128, 128, (ctx) => {
+  texture(128, 128, (ctx) => {
     const g = ctx.createRadialGradient(54, 50, 4, 64, 64, 64)
     g.addColorStop(0, '#6a5cff')
     g.addColorStop(0.18, '#1d2a55')

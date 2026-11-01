@@ -1,13 +1,13 @@
 import { login, register } from '../network/api'
-import type { User } from '../network/contract'
 import { authErrorText, validateLogin, validateRegister, type FieldErrors, type FieldName } from './authForm'
+import { trimWs } from './text'
 
 type Mode = 'login' | 'register'
 
-export type LoginScreen = { show(): void; hide(): void; readonly visible: boolean }
+export type LoginScreen = { show(): void; readonly visible: boolean }
 
 /** Экран входа и регистрации поверх canvas: одна форма, две вкладки. */
-export function createLoginScreen(root: HTMLElement, onSuccess: (user: User) => void): LoginScreen {
+export function createLoginScreen(root: HTMLElement, onSuccess: () => void): LoginScreen {
   const screen = document.createElement('div')
   screen.className = 'login'
   screen.hidden = true
@@ -90,19 +90,19 @@ export function createLoginScreen(root: HTMLElement, onSuccess: (user: User) => 
   form.addEventListener('submit', async (e) => {
     e.preventDefault()
     if (busy) return
-    const username = value('username').trim()
+    const username = trimWs(value('username'))
     const password = value('password')
-    const display_name = value('display_name').trim()
+    const display_name = trimWs(value('display_name'))
     const errs = mode === 'login' ? validateLogin({ username, password }) : validateRegister({ username, display_name, password })
     if (Object.keys(errs).length) return showErrors(errs)
     showErrors({})
     busy = true
     submit.disabled = true
     try {
-      const user = mode === 'login' ? await login({ username, password }) : await register({ username, display_name, password })
+      await (mode === 'login' ? login({ username, password }) : register({ username, display_name, password }))
       fields.get('password')!.input.value = ''
       hide()
-      onSuccess(user)
+      onSuccess()
     } catch (err) {
       const { form, fields } = authErrorText(err)
       showErrors(fields, form)
@@ -126,7 +126,6 @@ export function createLoginScreen(root: HTMLElement, onSuccess: (user: User) => 
       setMode('login')
       fields.get('username')!.input.focus()
     },
-    hide,
     get visible() {
       return !screen.hidden
     },

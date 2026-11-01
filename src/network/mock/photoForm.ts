@@ -15,11 +15,16 @@ export function checkPhotoForm(form: FormData): string | null {
   return null
 }
 
-/** Отпечаток запроса для идемпотентности: размер файла и нормализованные поля. */
-export function photoFingerprint(form: FormData): string {
+/** Отпечаток запроса для идемпотентности: SHA-256 содержимого файла и нормализованные поля (api.md §8). */
+export async function photoFingerprint(form: FormData): Promise<string> {
   const image = form.get('image')
+  let hash = ''
+  if (image instanceof Blob) {
+    const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', await image.arrayBuffer()))
+    hash = [...digest].map((b) => b.toString(16).padStart(2, '0')).join('')
+  }
   return JSON.stringify([
-    image instanceof Blob ? image.size : -1,
+    hash,
     form.get('room_id'),
     form.get('movement_epoch'),
     form.get('caption') ?? '',

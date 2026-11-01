@@ -1,14 +1,10 @@
-import { codePoints, trimWs } from './authForm'
+import { validateText } from './text'
 
 export const CHAT_MAX_LEN = 500
 const CHAT_KEEP = 100
 
 /** Текст после trim в кодовых точках 1–500, иначе null (api.md §6). */
-export function validateChatText(raw: string): string | null {
-  const text = trimWs(raw)
-  const len = codePoints(text)
-  return len >= 1 && len <= CHAT_MAX_LEN ? text : null
-}
+export const validateChatText = (raw: string): string | null => validateText(raw, CHAT_MAX_LEN)
 
 export type ChatLine = { author: string; color: string | null; text: string }
 
@@ -43,10 +39,13 @@ export type ChatKeyContext = {
   blocked: boolean
 }
 
-/** Что делает клавиша на уровне документа: открыть чат, закрыть его или ничего. */
-export function chatKeyAction(code: string, ctx: ChatKeyContext): 'open' | 'close' | null {
+/** Что делает клавиша на уровне документа: открыть чат, закрыть его, вернуть фокус в поле или ничего. */
+export function chatKeyAction(code: string, ctx: ChatKeyContext): 'open' | 'close' | 'focus' | null {
   // Esc ловим и вне поля: фокус мог уйти кликом мимо, а чат при этом остаётся открытым.
   if (code === 'Escape') return ctx.chatOpen ? 'close' : null
   if (code !== 'Enter' && code !== 'NumpadEnter') return null
-  return ctx.chatOpen || ctx.typing || ctx.blocked ? null : 'open'
+  if (ctx.typing) return null
+  // Чат открыт, а фокус ушёл кликом мимо поля: Enter возвращает его в поле.
+  if (ctx.chatOpen) return 'focus'
+  return ctx.blocked ? null : 'open'
 }

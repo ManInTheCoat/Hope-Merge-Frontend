@@ -40,6 +40,11 @@ test('Enter открывает чат только вне полей ввода 
   expect(chatKeyAction('NumpadEnter', ctx)).toBe('open')
   expect(chatKeyAction('Enter', { ...ctx, typing: true })).toBeNull()
   expect(chatKeyAction('Enter', { ...ctx, blocked: true })).toBeNull()
-  expect(chatKeyAction('Enter', { ...ctx, chatOpen: true })).toBeNull()
+  expect(chatKeyAction('Enter', { ...ctx, chatOpen: true })).toBe('focus')
   expect(chatKeyAction('Escape', ctx)).toBeNull()
+})
+
+test('чат открыт, фокус ушёл кликом мимо поля: Enter возвращает фокус', () => {
+  expect(chatKeyAction('Enter', { chatOpen: true, typing: false, blocked: false })).toBe('focus')
+  expect(chatKeyAction('Enter', { chatOpen: true, typing: true, blocked: false })).toBeNull()
 })

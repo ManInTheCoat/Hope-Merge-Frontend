@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { encodeUnderLimit, fitFrame, type EncodeFn } from '../src/photo/frame'
+import { canvasEncoder, encodeUnderLimit, fitFrame, type EncodeFn } from '../src/photo/frame'
 
 test('fitFrame не трогает кадр, который уже помещается', () => {
   expect(fitFrame(1280, 720)).toEqual({ width: 1280, height: 720 })
@@ -42,4 +42,23 @@ test('encodeUnderLimit уменьшает размер вдвое, если не
 test('encodeUnderLimit сдаётся, когда сторона дошла до 1 px', async () => {
   const enc: EncodeFn = async () => new Blob([new Uint8Array(3e6)])
   await expect(encodeUnderLimit(enc, 4, 4)).rejects.toThrow()
+})
+
+test('canvasEncoder: масштабированный холст создаётся один раз на размер, а не на каждое качество', async () => {
+  let created = 0
+  const fakeCanvas = () => {
+    created++
+    return {
+      width: 0,
+      height: 0,
+      getContext: () => ({ drawImage() {} }),
+      toBlob: (cb: (b: Blob) => void) => cb(new Blob([new Uint8Array(1)])),
+    } as unknown as HTMLCanvasElement
+  }
+  const frame = { width: 1920, height: 1080, toBlob: (cb: (b: Blob) => void) => cb(new Blob()) } as unknown as HTMLCanvasElement
+  const enc = canvasEncoder(frame, fakeCanvas)
+  for (const q of [0.9, 0.8, 0.7, 0.6, 0.5, 0.4]) await enc(960, 540, q)
+  expect(created).toBe(1)
+  await enc(480, 270, 0.9)
+  expect(created).toBe(2)
 })

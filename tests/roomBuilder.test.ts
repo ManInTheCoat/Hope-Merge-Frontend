@@ -42,7 +42,7 @@ const room: Room = {
       interaction_radius_m: 3,
     },
   ],
-  guides: [{ id: 'guide_1', display_name: 'Куратор', subtitle: '', position: { x: 3, y: 0, z: -3 }, rotation_y: 0, interaction_radius_m: 3 }],
+  guides: [{ id: 'guide_1', display_name: 'Гид', subtitle: '', position: { x: 3, y: 0, z: -3 }, rotation_y: 0, interaction_radius_m: 3 }],
 }
 
 const stubLabel = () => new THREE.Group()
@@ -56,13 +56,6 @@ test('меш на каждую поверхность, коллайдеры то
   expect(built.bounds).toEqual({ minX: -6, maxX: 6, minZ: -8, maxZ: 8 })
 })
 
-test('exhibitMeshes содержит все картины на своих местах', () => {
-  const built = buildRoom(room, new Map([['asset_1', fakeBitmap]]), stubLabel)
-  expect([...built.exhibitMeshes.keys()].sort()).toEqual(['ex_1', 'ex_2'])
-  const m = built.exhibitMeshes.get('ex_1')!
-  expect(m.position.x).toBe(-3)
-  expect(m.position.z).toBe(-7.95)
-})
 
 test('картина без битмапа не падает', () => {
   expect(() => buildRoom(room, new Map(), stubLabel)).not.toThrow()
@@ -140,4 +133,39 @@ test('дверь смотрит внутрь зала', () => {
   expect(s.z).toBeLessThan(-0.99)
   const e = facing(doorById(built, 'door_e'))
   expect(e.x).toBeLessThan(-0.99)
+})
+
+test('низкий постамент рядом с точкой двери не считается стеной', () => {
+  const r: Room = {
+    ...room,
+    bounds: { min: { x: 10, y: 0, z: 10 }, max: { x: 20, y: 4, z: 20 } },
+    surfaces: [{ id: 'plinth', position: { x: 13.1, y: 0.5, z: 12 }, size: { x: 1, y: 1, z: 1 }, color: '#ccc', collidable: true }],
+    doors: [{ id: 'd', target_room_id: 'x', label: 'Д', position: { x: 12, y: 0, z: 12 }, interaction_radius_m: 1.5 }],
+    exhibits: [],
+    guides: [],
+  }
+  const d = doorById(buildRoom(r, new Map(), stubLabel), 'd')
+  expect(d.position.x).toBe(12)
+  expect(d.position.z).toBe(12)
+})
+
+test('без стены рядом дверь смотрит к центру зала, а не к началу координат', () => {
+  const r: Room = {
+    ...room,
+    bounds: { min: { x: 10, y: 0, z: 10 }, max: { x: 20, y: 4, z: 20 } },
+    surfaces: [],
+    doors: [{ id: 'd', target_room_id: 'x', label: 'Д', position: { x: 12, y: 0, z: 15 }, interaction_radius_m: 1.5 }],
+    exhibits: [],
+    guides: [],
+  }
+  const f = facing(doorById(buildRoom(r, new Map(), stubLabel), 'd'))
+  expect(f.x).toBeGreaterThan(0.99) // центр (15,15) — по +X
+})
+
+test('таблички гидов отдаются наружу, чтобы поворачивать их к камере', () => {
+  const r: Room = {
+    ...room,
+    guides: [{ id: 'g', display_name: 'Гид', subtitle: '', position: { x: 0, y: 0, z: 0 }, rotation_y: 0, interaction_radius_m: 3 }],
+  }
+  expect(buildRoom(r, new Map(), stubLabel).guideLabels.length).toBe(1)
 })

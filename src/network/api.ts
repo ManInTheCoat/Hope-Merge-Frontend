@@ -1,15 +1,20 @@
 import {
   API_BASE,
   type AuthResponse,
+  type ErrorBody,
+  type Generation,
   type GenerationsPage,
   type HttpErrorBody,
+  type LoginRequest,
   type Manifest,
   type MeResponse,
   type Photo,
+  type RegisterRequest,
+  type Room,
   type User,
 } from './contract'
 
-type ApiErrorExtra = { retry_after_ms?: number; fields?: Record<string, string> }
+type ApiErrorExtra = Pick<ErrorBody, 'retry_after_ms' | 'fields'>
 
 export class ApiError extends Error {
   readonly status: number
@@ -90,10 +95,22 @@ export async function fetchGenerations(guideId: string, before: string | null, s
   return (await apiFetch(`/guides/${encodeURIComponent(guideId)}/generations?limit=20${cursor}`, { signal })).json()
 }
 
-export async function fetchRoomText(roomId: string, version: string, maxBytes: number, signal?: AbortSignal): Promise<string> {
+/** Генерация по request_id исходного вопроса; null — вопрос не принят (api.md §7, «История и восстановление»). */
+export async function fetchGenerationByRequest(guideId: string, requestId: string, signal?: AbortSignal): Promise<Generation | null> {
+  try {
+    const path = `/guides/${encodeURIComponent(guideId)}/generations/by-request/${encodeURIComponent(requestId)}`
+    return (await (await apiFetch(path, { signal })).json()) as Generation
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) return null
+    throw e
+  }
+}
+
+/** Описание зала и точный размер полученного файла: бюджет учитывает именно его (api.md, «Учёт бюджета»). */
+export async function fetchRoom(roomId: string, version: string, maxBytes: number, signal?: AbortSignal): Promise<{ room: Room; bytes: number }> {
   const path = `/world/rooms/${encodeURIComponent(roomId)}?version=${encodeURIComponent(version)}`
-  const bytes = await readLimited(await apiFetch(path, { signal }), maxBytes)
-  return new TextDecoder().decode(bytes)
+  const raw = await readLimited(await apiFetch(path, { signal }), maxBytes)
+  return { room: JSON.parse(new TextDecoder().decode(raw)) as Room, bytes: raw.length }
 }
 
 export async function fetchAssetBlob(assetId: string, version: string, maxBytes: number, signal?: AbortSignal): Promise<Blob> {
@@ -110,11 +127,11 @@ const postJson = (path: string, body?: unknown) =>
     ...(body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
   })
 
-export async function register(body: { username: string; display_name: string; password: string }): Promise<User> {
+export async function register(body: RegisterRequest): Promise<User> {
   return ((await (await postJson('/auth/register', body)).json()) as AuthResponse).user
 }
 
-export async function login(body: { username: string; password: string }): Promise<User> {
+export async function login(body: LoginRequest): Promise<User> {
   return ((await (await postJson('/auth/login', body)).json()) as AuthResponse).user
 }
 

@@ -218,6 +218,25 @@ export type ServerEvents = {
 
 export type ServerEventType = keyof ServerEvents
 
+/** Все события v1: неизвестным считается только тип не из этого списка (api.md §1). */
+export const SERVER_EVENT_TYPES: ReadonlySet<string> = new Set<ServerEventType>([
+  'world.snapshot',
+  'world.ready',
+  'world.entered',
+  'player.joined',
+  'player.left',
+  'players.state',
+  'chat.message',
+  'exhibit.inspected',
+  'guide.accepted',
+  'guide.started',
+  'guide.delta',
+  'guide.completed',
+  'guide.failed',
+  'guide.cancelled',
+  'error',
+])
+
 export type ServerEnvelope<T extends ServerEventType = ServerEventType> = {
   [K in T]: {
     type: K

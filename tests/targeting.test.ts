@@ -1,5 +1,12 @@
 import { expect, test } from 'bun:test'
-import { pickDoor, pickExhibit, pickTarget } from '../src/scene/targeting'
+import { pickDoor, pickTarget } from '../src/scene/targeting'
+import type { Exhibit } from '../src/network/contract'
+
+/** Экспонат под прицелом: то же, что pickTarget без гидов. */
+function pickExhibit(input: Parameters<typeof pickTarget>[0], exhibits: Exhibit[]): Exhibit | null {
+  const t = pickTarget(input, exhibits, [])
+  return t?.kind === 'exhibit' ? t.exhibit : null
+}
 import type { Door, Exhibit, Guide } from '../src/network/contract'
 
 const ex = (id: string, x: number, z: number, rotation_y = 0): Exhibit => ({
@@ -18,7 +25,6 @@ const main = ex('main', 0, -7.95)
 const look = (x: number, z: number, dir = { x: 0, y: 0, z: -1 }) => ({
   eye: { x, y: 1.65, z },
   dir,
-  playerXZ: { x, z },
 })
 
 test('смотрит на картину с 2 м', () => {
@@ -50,7 +56,7 @@ test('из двух картин берётся та, на которую смо
 
 test('картина с rotation_y = π/2 смотрит в +X', () => {
   const side = ex('side', -5.95, 0, Math.PI / 2)
-  const input = { eye: { x: -3.95, y: 1.65, z: 0 }, dir: { x: -1, y: 0, z: 0 }, playerXZ: { x: -3.95, z: 0 } }
+  const input = { eye: { x: -3.95, y: 1.65, z: 0 }, dir: { x: -1, y: 0, z: 0 } }
   expect(pickExhibit(input, [side])?.id).toBe('side')
 })
 
@@ -95,7 +101,7 @@ test('pickDoor: высота не учитывается', () => {
 
 const guide = (x: number, z: number): Guide => ({
   id: 'g',
-  display_name: 'Куратор',
+  display_name: 'Гид',
   subtitle: '',
   position: { x, y: 0, z },
   rotation_y: 0,
@@ -138,4 +144,23 @@ test('гид ближе экспоната по лучу — цель гид', (
 test('без гидов pickTarget совпадает с pickExhibit', () => {
   expect(pickTarget(look(0, -5.95), [main], [])).toEqual({ kind: 'exhibit', exhibit: main })
   expect(pickTarget(look(0, -4), [main], [])).toBeNull()
+})
+
+test('pickDoor: дверь за стеной не подсвечивается (сервер проверяет видимость от глаз)', () => {
+  const wall = { minX: -2, maxX: 2, minY: 0, maxY: 4, minZ: 0.4, maxZ: 0.6 }
+  expect(pickDoor({ x: 0, z: 0 }, [door('d', 0, 1)], [wall])).toBeNull()
+  expect(pickDoor({ x: 0, z: 0 }, [door('d', 0, 1)], [])?.id).toBe('d')
+})
+
+test('pickDoor: пол под точкой двери не закрывает её', () => {
+  const floor = { minX: -10, maxX: 10, minY: -0.2, maxY: 0, minZ: -10, maxZ: 10 }
+  expect(pickDoor({ x: 0, z: 0 }, [door('d', 0, 1)], [floor])?.id).toBe('d')
+})
+
+test('подсказка считает расстояние от позиции, известной серверу, а не от камеры', () => {
+  const target = ex('main', 0, -8)
+  const eye = { x: 0, y: 1.65, z: -5.5 } // камера в 2,5 м — в радиусе подсказки
+  const dir = { x: 0, y: 0, z: -1 }
+  expect(pickTarget({ eye, dir, rangeFrom: { x: 0, z: -5.5 } }, [target], [])?.kind).toBe('exhibit')
+  expect(pickTarget({ eye, dir, rangeFrom: { x: 0, z: -4.9 } }, [target], [])).toBeNull() // сервер видит 3,1 м
 })

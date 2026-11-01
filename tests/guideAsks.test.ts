@@ -19,7 +19,7 @@ function gen(id: string, status: GenerationStatus, extra: Partial<Generation> = 
 const answer = (text: string) => ({ id: 'a', role: 'assistant' as const, text, created_at: '' })
 
 function asking(asks = new GuideAsks()) {
-  asks.start({ requestId: 'r1', guideId: 'g1', guideName: 'Куратор', question: 'Кто автор?' })
+  asks.start({ requestId: 'r1', guideId: 'g1', guideName: 'Гид', question: 'Кто автор?' })
   return asks
 }
 
@@ -59,13 +59,13 @@ test('completed заменяет поток итоговым текстом и �
   expect(asks.entries('g1', [])).toEqual([{ key: 'gen1', question: 'Кто автор?', answer: 'Иван Шишкин', state: 'done', note: null }])
 })
 
-test('failed CANCELLED сохраняет частичный текст и пометку «Отменено»', () => {
+test('failed CANCELLED: частичного текста нет (в историю он не попадает), пометка «Отменено»', () => {
   const asks = asking()
   asks.accepted('r1', live('running'))
   asks.delta('gen1', 0, 'Это ')
   asks.finished(live('failed', { error: { code: 'CANCELLED', message: 'x', retryable: false } }))
   expect(asks.active).toBeNull()
-  expect(asks.entries('g1', [])[0]).toMatchObject({ state: 'failed', answer: 'Это ', note: 'Отменено' })
+  expect(asks.entries('g1', [])[0]).toMatchObject({ state: 'failed', answer: '', note: 'Отменено' })
 })
 
 test('accepted уже completed сразу завершает вопрос', () => {
@@ -108,10 +108,10 @@ test('rejected после accepted не снимает вопрос', () => {
   expect(asks.active?.generationId).toBe('gen1')
 })
 
-test('статус у другого гида — «Ждём ответ: Куратор»', () => {
+test('статус у другого гида — «Ждём ответ: Гид»', () => {
   const asks = asking()
   asks.accepted('r1', live('running'))
-  expect(asks.status('g2')).toEqual({ text: 'Ждём ответ: Куратор', canCancel: true })
+  expect(asks.status('g2')).toEqual({ text: 'Ждём ответ: Гид', canCancel: true })
   expect(asks.entries('g2', [])).toEqual([])
 })
 
@@ -189,4 +189,34 @@ test('failureText по кодам', () => {
   expect(failureText(e('AI_OUTPUT_LIMIT'))).toBe('Ответ оказался слишком длинным')
   expect(failureText(e('OTHER'))).toBe('серверный текст')
   expect(failureText(null)).toBe('Ответ не получен')
+})
+
+test('тайм-аут ask, генерация найдена по request_id: продолжаем с её статусом, отмена доступна', () => {
+  const asks = asking()
+  expect(asks.recover('r1', live('running'))).toBeNull()
+  expect(asks.status('g1')).toEqual({ text: 'Гид отвечает…', canCancel: true })
+})
+
+test('тайм-аут ask, генерации нет (404): вопрос снят, текст возвращается', () => {
+  const asks = asking()
+  expect(asks.recover('r1', null)).toEqual({ question: 'Кто автор?', guideId: 'g1' })
+  expect(asks.active).toBeNull()
+})
+
+test('поздний guide.accepted после тайм-аута не теряется, пока идёт восстановление', () => {
+  const asks = asking()
+  asks.accepted('r1', live('queued'))
+  expect(asks.active?.generationId).toBe('gen1')
+  expect(asks.recover('r1', live('queued'))).toBeNull() // повтор того же — без изменений
+  expect(asks.status('g1')?.canCancel).toBe(true)
+})
+
+test('пропуск индекса в guide.delta: onGap один раз на генерацию', () => {
+  const gaps: string[] = []
+  const asks = asking(new GuideAsks({ onGap: (id) => gaps.push(id) }))
+  asks.accepted('r1', live('running'))
+  asks.delta('gen1', 0, 'А')
+  asks.delta('gen1', 2, 'В')
+  asks.delta('gen1', 3, 'Г')
+  expect(gaps).toEqual(['gen1'])
 })

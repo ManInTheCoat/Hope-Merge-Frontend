@@ -1,13 +1,20 @@
 import { ApiError } from '../network/api'
 import type { Photo } from '../network/contract'
 import { uuidV4 } from '../network/uuid'
+import { rateLimitText } from '../ui/errorText'
 
 /** Снимок с полями запроса. Ключ один на снимок: повтор после потерянного ответа идёт с ним же. */
 export type Shot = { key: string; blob: Blob; roomId: string; epoch: number; exhibitId: string | null; takenAt: Date }
 
 export type Upload = (form: FormData, key: string, signal: AbortSignal) => Promise<Photo>
 
-export type SaveOptions = { signal?: AbortSignal; totalMs?: number; retryDelaysMs?: number[] }
+export type SaveOptions = {
+  signal?: AbortSignal
+  totalMs?: number
+  retryDelaysMs?: number[]
+  /** Сервер не принял экспонат: дальше отправляется этот снимок (без экспоната, с новым ключом). */
+  onFallback?: (shot: Shot) => void
+}
 
 const TOTAL_MS = 15_000
 const RETRY_DELAYS_MS = [1000, 2000]
@@ -51,10 +58,11 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 /**
  * Загружает снимок. Сетевой сбой — повтор с тем же ключом и тем же телом. Ответ с кодом ошибки не
  * повторяется, кроме одного отката без `exhibit_id` (и с новым ключом: это уже другой запрос), если
- * сервер не принял экспонат. При откате `shot` меняется, чтобы ручной повтор шёл с актуальным ключом.
+ * сервер не принял экспонат. При откате вызывается `onFallback` с новым снимком, чтобы ручной повтор шёл с актуальным ключом.
  * Общий таймаут обрывает текущий запрос и отменяет оставшиеся попытки.
  */
-export async function savePhoto(shot: Shot, upload: Upload, opts: SaveOptions = {}): Promise<Photo> {
+export async function savePhoto(original: Shot, upload: Upload, opts: SaveOptions = {}): Promise<{ photo: Photo; shot: Shot }> {
+  let shot = original
   const delays = opts.retryDelaysMs ?? RETRY_DELAYS_MS
   const ac = new AbortController()
   let timedOut = false
@@ -79,15 +87,15 @@ export async function savePhoto(shot: Shot, upload: Upload, opts: SaveOptions = 
     for (;;) {
       if (ac.signal.aborted) fail(abortError(ac.signal))
       try {
-        return await upload(buildPhotoForm(shot), shot.key, ac.signal)
+        return { photo: await upload(buildPhotoForm(shot), shot.key, ac.signal), shot }
       } catch (e) {
         if (ac.signal.aborted) fail(e)
         if (e instanceof ApiError) {
           const exhibitRejected = e.code === 'OUT_OF_RANGE' || e.code === 'NOT_FOUND'
           if (exhibitRejected && shot.exhibitId !== null && !fellBack) {
             fellBack = true
-            shot.exhibitId = null
-            shot.key = uuidV4()
+            shot = { ...shot, exhibitId: null, key: uuidV4() }
+            opts.onFallback?.(shot)
             continue
           }
           throw e
@@ -109,6 +117,6 @@ export async function savePhoto(shot: Shot, upload: Upload, opts: SaveOptions = 
 export function photoErrorText(e: unknown): string {
   if (e instanceof PhotoTimeoutError) return e.message
   if (!(e instanceof ApiError)) return 'Нет связи с сервером'
-  if (e.code === 'RATE_LIMITED') return `Слишком часто, подождите ${Math.ceil((e.retryAfterMs ?? 1000) / 1000)} с`
+  if (e.code === 'RATE_LIMITED') return rateLimitText(e.retryAfterMs)
   return e.message
 }

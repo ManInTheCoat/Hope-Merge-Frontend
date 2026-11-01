@@ -1,7 +1,14 @@
 import type { Generation, GenerationsPage, Guide } from '../network/contract'
-import { codePoints, trimWs } from './authForm'
+import { inputMeta, trimWs } from './text'
 import { GUIDE_MAX_LEN, validateGuideText, type GuideAsks } from './guideAsks'
 import { panelKeyAction } from './guideKeys'
+import { el } from './dom'
+
+/** Более старая страница истории: спереди, без дублей (записи могли сдвинуться между запросами). */
+export function mergeOlderPage(history: readonly Generation[], older: readonly Generation[]): Generation[] {
+  const known = new Set(history.map((g) => g.id))
+  return [...older.filter((g) => !known.has(g.id)), ...history]
+}
 
 const COUNTER_FROM = 1800
 /** Ближе этого к краю ленты считаем, что игрок у края: подгружаем историю или прокручиваем к новому. */
@@ -27,13 +34,6 @@ export type GuidePanel = {
   readonly guideId: string | null
   /** Ошибка под полем; `restore` — вернуть текст вопроса в поле. */
   showError(text: string, restore?: string): void
-}
-
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, parent: HTMLElement): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag)
-  node.className = className
-  parent.appendChild(node)
-  return node
 }
 
 /** Диалог с гидом, вариант A: панель справа, зал остаётся виден. */
@@ -83,9 +83,7 @@ export function createGuidePanel(root: HTMLElement, opts: GuidePanelOptions): Gu
   let error = ''
 
   function updateMeta() {
-    const len = codePoints(trimWs(input.value))
-    const counter = len > COUNTER_FROM ? `${len} / ${GUIDE_MAX_LEN}` : ''
-    meta.textContent = [error, counter].filter(Boolean).join(' · ')
+    meta.textContent = inputMeta(input.value, GUIDE_MAX_LEN, COUNTER_FROM, error)
     meta.classList.toggle('guide-meta--error', !!error)
     meta.hidden = !meta.textContent
   }
@@ -179,8 +177,7 @@ export function createGuidePanel(root: HTMLElement, opts: GuidePanelOptions): Gu
     try {
       const page = await opts.loadPage(guide.id, nextBefore)
       if (id !== openId) return
-      const known = new Set(history.map((g) => g.id))
-      history = [...page.items.filter((g) => !known.has(g.id)), ...history]
+      history = mergeOlderPage(history, page.items)
       nextBefore = page.next_before
     } catch {
       if (id !== openId) return

@@ -1,4 +1,4 @@
-import { codePoints, trimWs } from './authForm'
+import { inputMeta, trimWs } from './text'
 import { CHAT_MAX_LEN, ChatLog, validateChatText, type ChatLine } from './chatLog'
 
 const FADE_AFTER_MS = 10_000
@@ -8,6 +8,8 @@ const NEUTRAL_COLOR = '#c9c4bb'
 export type Chat = {
   add(line: ChatLine): void
   open(): void
+  /** Вернуть фокус в поле открытого чата. */
+  focus(): void
   close(): void
   readonly isOpen: boolean
   clear(): void
@@ -82,9 +84,7 @@ export function createChat(root: HTMLElement, opts: ChatOptions): Chat {
   }
 
   function updateMeta(error?: string) {
-    const len = codePoints(trimWs(input.value))
-    const counter = len > COUNTER_FROM ? `${len} / ${CHAT_MAX_LEN}` : ''
-    meta.textContent = [error, counter].filter(Boolean).join(' · ')
+    meta.textContent = inputMeta(input.value, CHAT_MAX_LEN, COUNTER_FROM, error)
     meta.classList.toggle('chat-meta--error', !!error)
     meta.hidden = !isOpen || !meta.textContent
   }
@@ -143,6 +143,9 @@ export function createChat(root: HTMLElement, opts: ChatOptions): Chat {
       log.push(line)
       render()
       wake()
+    },
+    focus() {
+      if (isOpen) input.focus()
     },
     open() {
       if (isOpen) return

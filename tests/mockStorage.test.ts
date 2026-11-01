@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { loadMockState, MOCK_STORAGE_KEY, repairPose, saveMockState, type MockState } from '../src/network/mock/storage'
+import { loadMockState, mergeMockState, MOCK_STORAGE_KEY, repairPose, saveMockState, type MockState } from '../src/network/mock/storage'
 
 function memoryStorage(initial: Record<string, string> = {}): Storage {
   const m = new Map(Object.entries(initial))
@@ -82,4 +82,22 @@ test('repairPose: нет координат или они не числа → с
 
 test('repairPose возвращает копию стартовой точки, а не её саму', () => {
   expect(repairPose(null as never, hasRoom, start)).not.toBe(start)
+})
+
+test('repairPose: поза вне границ или внутри блока → стартовая точка', () => {
+  const pose = state.accounts[0].pose
+  const inside = (_room: string, p: { x: number; z: number }) => Math.abs(p.x) < 5
+  expect(repairPose({ ...pose, position: { x: 7, y: 0, z: 0 } }, inside, start)).toEqual(start)
+  expect(repairPose({ ...pose, position: { x: 1, y: 0, z: 0 } }, inside, start).position).toEqual({ x: 1, y: 0, z: 0 })
+})
+
+test('mergeMockState: аккаунты обеих вкладок сохраняются, свои данные и сессия — свои', () => {
+  const a = state.accounts[0]
+  const other = { ...a, user: { ...a.user, id: 'u_other', username: 'other' } }
+  const stored: MockState = { accounts: [other, { ...a, password: 'old' }], session: 'other' }
+  const mine: MockState = { accounts: [a], session: a.user.username }
+  const merged = mergeMockState(stored, mine)
+  expect(merged.accounts.map((x) => x.user.username).sort()).toEqual([a.user.username, 'other'].sort())
+  expect(merged.accounts.find((x) => x.user.id === a.user.id)!.password).toBe(a.password)
+  expect(merged.session).toBe(a.user.username)
 })

@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
-import { CLIENT_SPEED_FACTOR, MoveKeys, moveVector, shouldSendMove, wrapAngle } from '../src/scene/input'
+import { CLIENT_SPEED_FACTOR, MoveKeys, moveVector, shouldSendMove } from '../src/scene/input'
+import { wrapAngle } from '../src/scene/angles'
 
 const none = { forward: false, back: false, left: false, right: false }
 const near = (a: number, b: number) => expect(Math.abs(a - b)).toBeLessThan(1e-9)

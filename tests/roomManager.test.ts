@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
-import { ContentError, RoomManager, type RoomManagerDeps } from '../src/world/RoomManager'
+import { ContentError } from '../src/network/api'
+import { RoomManager, type RoomManagerDeps } from '../src/world/RoomManager'
 import type { Room, RoomPackage } from '../src/network/contract'
 import { AssetBudget } from '../src/world/AssetBudget'
 
@@ -23,13 +24,17 @@ function setup(over: Partial<RoomManagerDeps> = {}) {
   const deps: RoomManagerDeps = {
     version: 'v1',
     budget,
-    fetchRoomText: async (id, version) => {
+    // Как настоящий api.ts: чтение обрывается, как только превышен объявленный размер.
+    fetchRoom: async (id, version, maxBytes) => {
       calls.push(`room:${id}:${version}`)
-      return roomText
+      if (roomTextBytes > maxBytes) throw new ContentError('больше объявленного')
+      return { room: JSON.parse(roomText) as Room, bytes: roomTextBytes }
     },
-    fetchAssetBlob: async (id, version) => {
+    fetchAssetBlob: async (id, version, maxBytes) => {
       calls.push(`asset:${id}:${version}`)
-      return new Blob([new Uint8Array(id === 'a1' ? 10 : 20)])
+      const size = id === 'a1' ? 10 : 20
+      if (size > maxBytes) throw new ContentError('больше объявленного')
+      return new Blob([new Uint8Array(size)])
     },
     decode: async (blob) => ({ size: blob.size, close: () => closed.push(String(blob.size)) }) as unknown as ImageBitmap,
     ...over,
@@ -118,9 +123,9 @@ test('повторный load выгружает прежний зал', async (
 test('объявленный размер передаётся в загрузку как лимит', async () => {
   const limits: string[] = []
   const { manager } = setup({
-    fetchRoomText: async (id, _v, maxBytes) => {
+    fetchRoom: async (id, _v, maxBytes) => {
       limits.push(`room:${id}:${maxBytes}`)
-      return roomText
+      return { room, bytes: roomTextBytes }
     },
     fetchAssetBlob: async (id, _v, maxBytes) => {
       limits.push(`asset:${id}:${maxBytes}`)
@@ -214,9 +219,9 @@ test('повторный load не держит оба зала', async () => {
   let usedAtSecondStart = -1
   let second = false
   const { manager, budget } = setup({
-    fetchRoomText: async () => {
+    fetchRoom: async () => {
       if (second && usedAtSecondStart < 0) usedAtSecondStart = budget.used - roomTextBytes // свой резерв описания уже сделан
-      return roomText
+      return { room, bytes: roomTextBytes }
     },
   })
   await manager.load(pkg(), new AbortController().signal)
@@ -224,4 +229,11 @@ test('повторный load не держит оба зала', async () => {
   await manager.load(pkg(), new AbortController().signal)
   expect(usedAtSecondStart).toBeLessThanOrEqual(30) // только резервы нового пакета, без старого зала
   expect(budget.used).toBe(roomTextBytes + 30)
+})
+
+test('бюджет описания — сырые полученные байты, а не перекодированный текст', async () => {
+  const withBom = roomTextBytes + 3
+  const { manager, budget } = setup({ fetchRoom: async () => ({ room, bytes: withBom }) })
+  await manager.load(pkg({ descriptor_bytes: withBom }), new AbortController().signal)
+  expect(budget.used).toBe(withBom + 30)
 })

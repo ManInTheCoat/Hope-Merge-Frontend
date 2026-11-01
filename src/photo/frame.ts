@@ -45,14 +45,19 @@ export function copyFrame(source: HTMLCanvasElement): HTMLCanvasElement {
   return frame
 }
 
-export function canvasEncoder(frame: HTMLCanvasElement): EncodeFn {
+/** Кодирует кадр в JPEG; уменьшенная копия рисуется один раз на размер, а не на каждое качество. */
+export function canvasEncoder(frame: HTMLCanvasElement, makeCanvas = () => document.createElement('canvas')): EncodeFn {
+  let scaled: HTMLCanvasElement | null = null
   return (width, height, quality) => {
     let src = frame
     if (width !== frame.width || height !== frame.height) {
-      src = document.createElement('canvas')
-      src.width = width
-      src.height = height
-      src.getContext('2d')!.drawImage(frame, 0, 0, width, height)
+      if (!scaled || scaled.width !== width || scaled.height !== height) {
+        scaled = makeCanvas()
+        scaled.width = width
+        scaled.height = height
+        scaled.getContext('2d')!.drawImage(frame, 0, 0, width, height)
+      }
+      src = scaled
     }
     return new Promise<Blob>((resolve, reject) =>
       src.toBlob((b) => (b ? resolve(b) : reject(new Error('Не удалось закодировать кадр'))), 'image/jpeg', quality),

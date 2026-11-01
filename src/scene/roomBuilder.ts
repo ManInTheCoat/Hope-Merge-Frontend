@@ -1,13 +1,14 @@
 import * as THREE from 'three'
 import type { Room } from '../network/contract'
-import { surfacesToColliders, type Aabb, type Bounds2 } from './collision'
+import { closestOnBox, surfacesToColliders, type Aabb, type Bounds2, type Vec2 } from './collision'
 import { makeLabel } from './labels'
 
 export type BuiltRoom = {
   group: THREE.Group
   colliders: Aabb[]
   bounds: Bounds2
-  exhibitMeshes: Map<string, THREE.Mesh>
+  /** Таблички с именами гидов: каждый кадр поворачиваются к камере, чтобы имя читалось с любой стороны. */
+  guideLabels: THREE.Object3D[]
   /** Освобождает геометрии, материалы и текстуры. Битмапы закрывает RoomManager.unload(). */
   dispose(): void
 }
@@ -20,14 +21,15 @@ const DOOR_DEPTH = 0.05
 /** Дальше этого от стены дверь не прижимаем: контент без стены рядом рисуем прямо в точке двери. */
 const DOOR_WALL_SEARCH_M = 1.5
 
-type XZ = { x: number; z: number }
-
-/** Точка на грани ближайшей стены и нормаль этой грани в сторону двери (внутрь зала). */
-export function doorPlacement(x: number, z: number, colliders: Aabb[]): { point: XZ; normal: XZ } {
-  let best: { point: XZ; normal: XZ; dist: number } | null = null
+/**
+ * Точка на грани ближайшей стены и нормаль этой грани в сторону двери (внутрь зала). Стена — блок не ниже
+ * двери: к постаменту или скамье дверь не прижимаем.
+ */
+function doorPlacement(x: number, z: number, colliders: Aabb[], center: Vec2): { point: Vec2; normal: Vec2 } {
+  let best: { point: Vec2; normal: Vec2; dist: number } | null = null
   for (const b of colliders) {
-    const cx = Math.min(Math.max(x, b.minX), b.maxX)
-    const cz = Math.min(Math.max(z, b.minZ), b.maxZ)
+    if (b.maxY < DOOR_HEIGHT) continue
+    const { x: cx, z: cz } = closestOnBox({ x, z }, b)
     const dist = Math.hypot(x - cx, z - cz)
     if (dist === 0 || dist > DOOR_WALL_SEARCH_M || (best && dist >= best.dist)) continue
     const dx = x - cx
@@ -38,8 +40,10 @@ export function doorPlacement(x: number, z: number, colliders: Aabb[]): { point:
   }
   if (best) return { point: best.point, normal: best.normal }
   // Стены рядом нет: ставим в точку двери лицом к центру зала.
-  const len = Math.hypot(x, z) || 1
-  return { point: { x, z }, normal: { x: -x / len, z: -z / len } }
+  const dx = center.x - x
+  const dz = center.z - z
+  const len = Math.hypot(dx, dz) || 1
+  return { point: { x, z }, normal: { x: dx / len, z: dz / len } }
 }
 
 export function buildRoom(room: Room, bitmaps: Map<string, ImageBitmap>, labelFn: LabelFn = makeLabel): BuiltRoom {
@@ -59,7 +63,6 @@ export function buildRoom(room: Room, bitmaps: Map<string, ImageBitmap>, labelFn
     group.add(mesh)
   }
 
-  const exhibitMeshes = new Map<string, THREE.Mesh>()
   for (const e of room.exhibits) {
     const bitmap = bitmaps.get(e.image_asset_id)
     let material: THREE.MeshBasicMaterial
@@ -85,13 +88,13 @@ export function buildRoom(room: Room, bitmaps: Map<string, ImageBitmap>, labelFn
     mesh.add(frame)
 
     group.add(mesh)
-    exhibitMeshes.set(e.id, mesh)
   }
 
   const colliders = surfacesToColliders(room.surfaces)
+  const center = { x: (room.bounds.min.x + room.bounds.max.x) / 2, z: (room.bounds.min.z + room.bounds.max.z) / 2 }
   for (const d of room.doors) {
     // Позиция двери — точка взаимодействия перед стеной (api.md); саму дверь ставим на ближайшую стену.
-    const { point, normal } = doorPlacement(d.position.x, d.position.z, colliders)
+    const { point, normal } = doorPlacement(d.position.x, d.position.z, colliders, center)
     const door = new THREE.Group()
     door.userData = { kind: 'door', id: d.id }
     door.position.set(point.x, 0, point.z)
@@ -108,6 +111,7 @@ export function buildRoom(room: Room, bitmaps: Map<string, ImageBitmap>, labelFn
     group.add(door)
   }
 
+  const guideLabels: THREE.Object3D[] = []
   for (const g of room.guides) {
     const figure = new THREE.Group()
     figure.userData = { kind: 'guide', id: g.id }
@@ -120,6 +124,7 @@ export function buildRoom(room: Room, bitmaps: Map<string, ImageBitmap>, labelFn
     head.position.y = 1.55
     const label = labelFn(g.display_name, 1.2)
     label.position.y = 2.0
+    guideLabels.push(label)
     figure.add(body, head, label)
     group.add(figure)
   }
@@ -128,7 +133,7 @@ export function buildRoom(room: Room, bitmaps: Map<string, ImageBitmap>, labelFn
     group,
     colliders,
     bounds: { minX: room.bounds.min.x, maxX: room.bounds.max.x, minZ: room.bounds.min.z, maxZ: room.bounds.max.z },
-    exhibitMeshes,
+    guideLabels,
     dispose() {
       group.traverse((o) => {
         const mesh = o as THREE.Mesh

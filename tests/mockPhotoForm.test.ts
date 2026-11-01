@@ -39,9 +39,15 @@ test('image строкой, а не файлом — отклоняется', ()
   expect(checkPhotoForm(form([['image', 'x'], ['room_id', 'r1'], ['movement_epoch', '1']]))).not.toBeNull()
 })
 
-test('отпечаток различает файл и поля', () => {
-  expect(photoFingerprint(form(ok))).toBe(photoFingerprint(form(ok)))
-  expect(photoFingerprint(form([...ok, ['exhibit_id', 'e1']]))).not.toBe(photoFingerprint(form(ok)))
+test('отпечаток различает файл и поля', async () => {
+  expect(await photoFingerprint(form(ok))).toBe(await photoFingerprint(form(ok)))
+  expect(await photoFingerprint(form([...ok, ['exhibit_id', 'e1']]))).not.toBe(await photoFingerprint(form(ok)))
   const bigger: [string, Blob] = ['image', new Blob(['xyz'], { type: 'image/jpeg' })]
-  expect(photoFingerprint(form([bigger, ok[1], ok[2]]))).not.toBe(photoFingerprint(form(ok)))
+  expect(await photoFingerprint(form([bigger, ok[1], ok[2]]))).not.toBe(await photoFingerprint(form(ok)))
+})
+
+test('отпечаток по содержимому: файл того же размера с другими байтами — другой отпечаток', async () => {
+  const a: [string, Blob] = ['image', new Blob(['aaaa'], { type: 'image/jpeg' })]
+  const b: [string, Blob] = ['image', new Blob(['bbbb'], { type: 'image/jpeg' })]
+  expect(await photoFingerprint(form([a, ok[1], ok[2]]))).not.toBe(await photoFingerprint(form([b, ok[1], ok[2]])))
 })

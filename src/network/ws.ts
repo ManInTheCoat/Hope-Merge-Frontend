@@ -1,4 +1,6 @@
 import {
+  PROTOCOL_VERSION,
+  SERVER_EVENT_TYPES,
   WS_PATH,
   type ClientEvents,
   type ClientEventType,
@@ -47,6 +49,11 @@ export class GameSocket {
         if (settled) return
         settled = true
         clearTimeout(timer)
+        if (snapshot.protocol_version !== PROTOCOL_VERSION) {
+          reject(new Error('UNSUPPORTED_PROTOCOL'))
+          socket.close()
+          return
+        }
         resolve({ socket, snapshot })
       })
       socket.onClose((code) => {
@@ -152,12 +159,11 @@ export class GameSocket {
         this.seenEvents.delete(this.seenEvents.values().next().value!)
       }
     }
-    const handlers = this.handlers.get(env.type)
-    if (!handlers?.size) {
+    if (!SERVER_EVENT_TYPES.has(env.type)) {
       console.warn('Неизвестное событие WS:', env.type)
       return
     }
-    handlers.forEach((h) => (h as (p: unknown, e: unknown) => void)(env.payload, env))
+    this.handlers.get(env.type)?.forEach((h) => (h as (p: unknown, e: unknown) => void)(env.payload, env))
   }
 
   private handleClose(code: number): void {
