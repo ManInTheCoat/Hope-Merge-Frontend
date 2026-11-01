@@ -22,6 +22,16 @@ import type { SundayClientMetric, SundayLamp, SundayRoomConfig } from '../sunday
 import { createAdminState } from './admin'
 import { NpcSim } from './npc'
 import { defaultRuntime } from './runtime'
+import {
+  actSlotPosition,
+  applyGuideEffect,
+  applyObjectAct,
+  checkActShape,
+  checkActState,
+  classifyGuideAction,
+  releaseLamp,
+  type ObjectActPayload,
+} from './lampSim'
 import { loadMockState, mergeMockState, repairPose, saveMockState, type StoredAccount } from './storage'
 import { START_POSITION, START_ROOM_ID, WORLD_VERSION, type MockWorld } from './world'
 
@@ -42,6 +52,12 @@ const CHAT_LIMIT = 5
 const CHAT_WINDOW_MS = 10_000
 const SYNC_LIMIT = 2
 const SYNC_WINDOW_MS = 10_000
+/** object.act — 10 за 10 с, guide.action — 3 за 10 с на пользователя (api-sunday.md §8). */
+const OBJECT_ACT_LIMIT = 10
+const GUIDE_ACTION_LIMIT = 3
+const SUNDAY_ACT_WINDOW_MS = 10_000
+/** Расстояние по XZ до слота или гида для object.act и guide.action (api-sunday.md §4, §6). */
+const ACT_RANGE_M = 3
 /** Код, который браузер видит при отказе upgrade (например, HTTP 401 до открытия WS). */
 const ABNORMAL_CLOSE = 1006
 /** `telemetry.probe` уходит раз в 5 с после snapshot; без ответа за это же время ping становится null (api-sunday.md §7). */
@@ -72,6 +88,17 @@ const WS_FIELDS: Record<string, Record<string, string>> = {
   'guide.ask': { guide_id: 'string', text: 'string', exhibit_id: '?string' },
   'guide.cancel': { generation_id: 'string' },
   'room.sync': {},
+  'object.act': {
+    object_id: 'string',
+    movement_epoch: 'number',
+    expected_revision: 'number',
+    action: 'string',
+    slot_id: '?string',
+    yaw: '?number',
+    head_pitch: '?number',
+    on: '?boolean',
+  },
+  'guide.action': { guide_id: 'string', text: 'string', movement_epoch: 'number', expected_revision: 'number' },
 }
 
 /** Ровно эти поля нужных типов: лишние и отсутствующие обязательные — VALIDATION_ERROR. */
@@ -169,6 +196,22 @@ export function createMockServer(
   const chatSends = new Map<string, number[]>()
   /** Время room.sync по user_id (api-sunday.md §8: не больше 2 за 10 с). */
   const syncs = new Map<string, number[]>()
+  const objectActs = new Map<string, number[]>()
+  const guideActions = new Map<string, number[]>()
+
+  /** Скользящее окно лимита: true — команда принята и занесена, иначе в `retry` сколько ждать. */
+  function takeSlot(book: Map<string, number[]>, userId: string, limit: number, nowMs: number): number | null {
+    const sent = (book.get(userId) ?? []).filter((t) => nowMs - t < SUNDAY_ACT_WINDOW_MS)
+    book.set(userId, sent)
+    if (sent.length >= limit) return Math.ceil(SUNDAY_ACT_WINDOW_MS - (nowMs - sent[0]))
+    sent.push(nowMs)
+    return null
+  }
+
+  /** Disconnect и дверь: лампа игрока возвращается на последний слот (api-sunday.md §4). */
+  function releaseHeldLamp(userId: string): void {
+    for (const rt of runtimes.values()) releaseLamp(rt, userId)
+  }
   /** Runtime залов: у сервера он в PostgreSQL, здесь — в памяти вкладки. */
   const runtimes = new Map([...world.rooms].map(([id, r]) => [id, defaultRuntime(r.room)]))
   const admin = createAdminState(world, runtimes)
@@ -705,7 +748,7 @@ export function createMockServer(
     /** world.runtime, а за ним полный npc.state (api-sunday.md §1); число NPC берётся из config.npc_count. */
     private sendRuntime(roomId: string, rid?: string) {
       const rt = runtimes.get(roomId)!
-      this.send_('world.runtime', rt, rid)
+      this.send_('world.runtime', structuredClone(rt), rid)
       if (this.npcSim && this.self?.room_id === roomId) {
         this.npcSim.setCount(rt.config.npc_count)
         this.send_('npc.state', this.npcSim.snapshot(), rid)
@@ -762,6 +805,7 @@ export function createMockServer(
       this.timers.forEach((t) => clearTimeout(t))
       this.timers.clear()
       if (socket === this) socket = null
+      if (this.self && session) releaseHeldLamp(session.account.user.id)
       persist() // штатное отключение сохраняет позицию; синхронно, поэтому успевает внутри pagehide
       this.emit(new CloseEvent('close', { code, wasClean: code === 1000 }), this.onclose)
     }
@@ -837,6 +881,7 @@ export function createMockServer(
           if (dist > door.interaction_radius_m) return this.error('OUT_OF_RANGE', 'Слишком далеко от двери', rid)
           const spawn = world.spawns.get(door.target_room_id)!
           this.cancelGeneration() // переход отменяет незавершённый вопрос (api.md §7)
+          releaseHeldLamp(acc.user.id) // дверь подтверждается только после возврата лампы на слот
           this.epoch += 1
           this.ackSeq = 0
           this.ready = false
@@ -864,6 +909,10 @@ export function createMockServer(
           sent.push(nowMs)
           return this.sendRuntime(self.room_id, rid)
         }
+        case 'object.act':
+          return this.objectAct(msg.payload as ObjectActPayload & { movement_epoch: number; expected_revision: number }, rid!)
+        case 'guide.action':
+          return this.guideAction(msg.payload, rid!)
         case 'chat.send': {
           const text = (msg.payload.text ?? '').trim()
           const photo = msg.payload.photo_id ? photos.get(msg.payload.photo_id) : undefined
@@ -908,6 +957,59 @@ export function createMockServer(
         case 'guide.cancel':
           return this.guideCancel(msg.payload.generation_id, rid!)
       }
+    }
+
+    // --- Лампа и просьбы гиду (api-sunday.md §4, §6): порядок проверок как у сервера ---
+
+    private snapshotRuntime(roomId: string) {
+      return structuredClone(runtimes.get(roomId)!)
+    }
+
+    private objectAct(p: ObjectActPayload & { movement_epoch: number; expected_revision: number }, rid: string) {
+      const self = this.self!
+      const userId = session!.account.user.id
+      const shape = checkActShape(p)
+      if (shape) return this.error(shape.code, shape.message, rid)
+      const retry = takeSlot(objectActs, userId, OBJECT_ACT_LIMIT, clock())
+      if (retry !== null) return this.error('RATE_LIMITED', 'Слишком часто', rid, { retry_after_ms: retry })
+      if (!this.ready) return this.error('GAME_NOT_READY', 'Игра не готова', rid)
+      if (p.movement_epoch !== this.epoch) return this.error('STALE_MOVEMENT_EPOCH', 'Неактуальный epoch', rid)
+      const rt = runtimes.get(self.room_id)!
+      const slot = p.object_id === rt.lamp.object_id ? actSlotPosition(rt, p) : null
+      if (!slot) return this.error('NOT_FOUND', 'Нет такого предмета', rid)
+      if (Math.hypot(slot.x - self.position.x, slot.z - self.position.z) > ACT_RANGE_M) {
+        return this.error('OUT_OF_RANGE', 'Слишком далеко', rid)
+      }
+      if (p.expected_revision !== rt.revision) return this.error('REVISION_CONFLICT', 'Зал изменился', rid)
+      const state = checkActState(rt, userId, p)
+      if (state) return this.error(state.code, state.message, rid)
+      applyObjectAct(rt, userId, p)
+      this.send_('object.acted', { action: p.action as 'take' | 'place' | 'aim' | 'power', runtime: this.snapshotRuntime(self.room_id) }, rid)
+    }
+
+    private guideAction(p: { guide_id: string; text: string; movement_epoch: number; expected_revision: number }, rid: string) {
+      const self = this.self!
+      const userId = session!.account.user.id
+      const text = p.text.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, '')
+      if (![...text].length || [...text].length > 200 || text.includes('\u0000')) {
+        return this.error('VALIDATION_ERROR', 'Текст 1–200 символов', rid)
+      }
+      const retry = takeSlot(guideActions, userId, GUIDE_ACTION_LIMIT, clock())
+      if (retry !== null) return this.error('RATE_LIMITED', 'Слишком часто', rid, { retry_after_ms: retry })
+      if (!this.ready) return this.error('GAME_NOT_READY', 'Игра не готова', rid)
+      if (p.movement_epoch !== this.epoch) return this.error('STALE_MOVEMENT_EPOCH', 'Неактуальный epoch', rid)
+      const rt = runtimes.get(self.room_id)!
+      // Расстояние меряется до положения гида из runtime, а не базового (api-sunday.md §2).
+      const guide = rt.guides.find((g) => g.guide_id === p.guide_id)
+      if (!guide) return this.error('NOT_FOUND', 'Гида нет в этом зале', rid)
+      if (Math.hypot(guide.position.x - self.position.x, guide.position.z - self.position.z) > ACT_RANGE_M) {
+        return this.error('OUT_OF_RANGE', 'Слишком далеко от гида', rid)
+      }
+      if (p.expected_revision !== rt.revision) return this.error('REVISION_CONFLICT', 'Зал изменился', rid)
+      const effect = classifyGuideAction(text)
+      if (!effect) return this.error('UNSUPPORTED_ACTION', 'Гид не умеет это делать', rid)
+      applyGuideEffect(rt, effect)
+      this.send_('guide.action.completed', { guide_id: p.guide_id, effect, runtime: this.snapshotRuntime(self.room_id) }, rid)
     }
 
     // --- Гид: queued → running → delta… → completed ---
