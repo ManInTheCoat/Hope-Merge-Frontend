@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import type { Room, Vec3 } from '../network/contract'
 import { closestOnBox, surfacesToColliders, type Aabb, type Bounds2, type Vec2 } from './collision'
+import { gestureWeight } from './guideGesture'
 import { disposeLabel, makeLabel } from './labels'
 import type { GalleryLook } from './galleryLook'
 import { createRuntimeView, type RuntimeView } from './runtimeView'
@@ -29,6 +30,8 @@ export type GuideActor = {
   update(dtS: number, player: { x: number; z: number } | null): void
   /** Кивок при начале разговора. */
   greet(): void
+  /** Жест, пока гид отвечает (от guide.started до terminal); включается и выключается плавно. */
+  setGesturing(on: boolean): void
   /** Новое положение и поворот (runtime заменяет базовые). */
   place(position: Vec3, rotationY: number): void
   /** Новая подпись над гидом. */
@@ -49,12 +52,28 @@ function capsuleGuide(g: Room['guides'][number], labelFn: LabelFn): GuideActor {
   body.position.y = 0.73
   const head = new THREE.Mesh(new THREE.SphereGeometry(0.2, 16, 12), new THREE.MeshStandardMaterial({ color: '#e8c9a6' }))
   head.position.y = 1.55
+  // Правая рука: поднимается и покачивается, пока гид отвечает.
+  const arm = new THREE.Group()
+  arm.position.set(0.36, 1.25, 0)
+  const armMesh = new THREE.Mesh(new THREE.CapsuleGeometry(0.07, 0.5, 4, 8).translate(0, -0.3, 0), new THREE.MeshStandardMaterial({ color: '#3f6f8f' }))
+  arm.add(armMesh)
+  let gesturing = false
+  let weight = 0
+  let clock = 0
   const actor: GuideActor = {
     id: g.id,
     object: figure,
     label: labelFn(g.display_name, 1.2),
-    update() {},
+    update(dtS) {
+      weight = gestureWeight(weight, gesturing, dtS)
+      clock += dtS
+      // Рука вперёд-вверх (взгляд вдоль −Z) и покачивание предплечья.
+      arm.rotation.x = -weight * (1.9 + 0.25 * Math.sin(clock * 7))
+    },
     greet() {},
+    setGesturing(on) {
+      gesturing = on
+    },
     place(position, rotationY) {
       figure.position.set(position.x, position.y, position.z)
       figure.rotation.y = rotationY
@@ -70,7 +89,7 @@ function capsuleGuide(g: Room['guides'][number], labelFn: LabelFn): GuideActor {
     dispose() {},
   }
   actor.label.position.y = 2.0
-  figure.add(body, head, actor.label)
+  figure.add(body, head, arm, actor.label)
   return actor
 }
 

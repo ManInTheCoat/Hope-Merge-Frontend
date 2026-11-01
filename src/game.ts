@@ -592,6 +592,13 @@ export async function startGame(host: HTMLElement): Promise<void> {
     applyNpc(s)
   }
 
+  /** Жест гида от guide.started до terminal (api-sunday.md §5): считаем живые генерации гида. */
+  function setGesture(s: Session, guideId: string, generationId: string, on: boolean) {
+    if (on) s.gestures.start(guideId, generationId)
+    else s.gestures.stop(generationId)
+    s.built?.guides.find((a) => a.id === guideId)?.setGesturing(s.gestures.active(guideId))
+  }
+
   /** Применяет последний принятый npc.state к сцене: чужой зал и сессию без Sunday пропускает (снимок подождёт showRoom). */
   function applyNpc(s: Session) {
     const st = s.npcSync.current
@@ -787,10 +794,20 @@ export async function startGame(host: HTMLElement): Promise<void> {
         }),
       )
       socket.on('guide.accepted', ({ generation }, env) => asks.accepted(env.request_id ?? '', generation))
-      socket.on('guide.started', ({ generation_id }) => asks.started(generation_id))
+      socket.on('guide.started', ({ generation_id }) => {
+        asks.started(generation_id)
+        const a = asks.active
+        if (a?.generationId === generation_id) setGesture(s, a.guideId, generation_id, true)
+      })
       socket.on('guide.delta', ({ generation_id, index, text }) => asks.delta(generation_id, index, text))
-      socket.on('guide.completed', ({ generation }) => asks.finished(generation))
-      socket.on('guide.failed', ({ generation }) => asks.finished(generation))
+      socket.on('guide.completed', ({ generation }) => {
+        asks.finished(generation)
+        setGesture(s, generation.guide_id, generation.id, false)
+      })
+      socket.on('guide.failed', ({ generation }) => {
+        asks.finished(generation)
+        setGesture(s, generation.guide_id, generation.id, false)
+      })
       socket.on('players.state', ({ players }) => {
         s.players.applyState(players, performance.now())
         const self = players.find((p) => p.user_id === s.selfId)

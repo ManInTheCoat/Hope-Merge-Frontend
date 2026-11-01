@@ -186,6 +186,7 @@ test('фигурки гидов строит фабрика и освобожд�
       label: new THREE.Group(),
       update() {},
       greet() {},
+      setGesturing() {},
       dispose: () => disposed.push(g.id),
     }),
   })
