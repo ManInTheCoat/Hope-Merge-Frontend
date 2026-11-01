@@ -1,6 +1,7 @@
 import type { Pose, User, Vec3 } from '../contract'
 
-export type StoredAccount = { user: User; password: string; pose: Pose }
+/** `admin` — роль администратора (api-sunday.md §3): у сервера это строка в БД, выдаётся командой `admin grant`. */
+export type StoredAccount = { user: User; password: string; pose: Pose; admin?: boolean }
 /** `session` — username вошедшего: у реального бэкенда cookie переживает перезагрузку страницы. */
 export type MockState = { accounts: StoredAccount[]; session: string | null }
 
