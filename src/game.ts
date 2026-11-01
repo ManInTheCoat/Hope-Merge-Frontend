@@ -33,6 +33,8 @@ import { createGuidePanel } from './ui/guidePanel'
 import { NO_CONNECTION, NO_RESPONSE, userErrorText } from './ui/errorText'
 import { createHud } from './ui/hud'
 import { hasSunday, mergeGuides, RoomSync } from './room/sync'
+import { createCrowd } from './npc/crowd'
+import { NpcSync } from './npc/npcSync'
 import { linkView } from './ui/linkView'
 import { createLoginScreen } from './ui/login'
 import { createPhotoCard } from './ui/photoCard'
@@ -565,6 +567,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
     controls.enabled = false
     closeCard()
     hud.showHint(null)
+    hud.showRequest(null)
     hud.showClickOverlay(false)
     target = null
     doorTarget = null
@@ -583,7 +586,17 @@ export async function startGame(host: HTMLElement): Promise<void> {
     s.guides = loaded.room.guides
     s.doors = loaded.room.doors
     scene.add(s.built.group)
+    s.crowd?.dispose()
+    s.crowd = createCrowd(s.built.group)
     applyRuntime(s)
+    applyNpc(s)
+  }
+
+  /** Применяет последний принятый npc.state к сцене: чужой зал и сессию без Sunday пропускает (снимок подождёт showRoom). */
+  function applyNpc(s: Session) {
+    const st = s.npcSync.current
+    if (!st || !s.crowd || !hasSunday(s.manifest) || !s.built || s.built.group.name !== st.room_id) return
+    s.crowd.apply(st, performance.now())
   }
 
   /**
@@ -655,6 +668,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
 
     // Сначала полностью освобождаем старый зал, только потом новые загрузки (api.md, «Учёт бюджета»).
     unloadRoom(s, scene, manager)
+    hud.showRequest(null)
     // Переход отменил незавершённый вопрос на сервере (api.md §7): точное состояние даст история.
     asks.reset()
     const { self, current_room } = entered
@@ -728,8 +742,15 @@ export async function startGame(host: HTMLElement): Promise<void> {
     startTelemetry(socket, fpsMeter) // metrics и pong разрешены до ready; остановится вместе с сокетом
     // Runtime приходит сразу за snapshot, а сессия создаётся позже (после затемнения): копим снимок здесь.
     const sync = new RoomSync(snapshot.self.room_id, snapshot.world_version)
+    const npcSync = new NpcSync(snapshot.self.room_id, snapshot.world_version)
     let live: Session | null = null
-    socket.on('world.entered', ({ self }) => sync.enter(self.room_id))
+    socket.on('world.entered', ({ self }) => {
+      sync.enter(self.room_id)
+      npcSync.enter(self.room_id)
+    })
+    socket.on('npc.state', (st) => {
+      if (npcSync.accept(st) && live && !live.lost) applyNpc(live)
+    })
     socket.on('world.runtime', (rt) => {
       if (sync.accept(rt) && live && !live.lost) applyRuntime(live)
     })
@@ -748,6 +769,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
     session = s
     s.socket = socket
     s.sync = sync
+    s.npcSync = npcSync
     live = s
     let closedCode: number | null = null
     try {
@@ -919,6 +941,11 @@ export async function startGame(host: HTMLElement): Promise<void> {
       if (s.roomId) view.update(s.players, s.roomId, now, camera)
       // Табличка — дочерний узел повёрнутой фигуры гида: мировой поворот к камере задаём через родителя.
       s.built.runtime.update(dt)
+      // Посетители: позы нужны и для реплики «пропустите». Она только пока игра готова и ничто не перекрывает экран.
+      const poses = s.crowd?.update(dt, now, s.ready ? s.path.sent : null) ?? []
+      const asked = s.passRequest.update(now, s.ready ? s.path.sent : null, poses)
+      const blocked = actionsLocked(s) || cardFor || chat.isOpen || guidePanel.isOpen || adminPanel.isOpen
+      hud.showRequest(blocked ? null : asked)
       for (const actor of s.built.guides) {
         actor.update(dt, s.path.sent)
         const label = actor.label

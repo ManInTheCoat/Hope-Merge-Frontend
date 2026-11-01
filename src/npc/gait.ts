@@ -3,6 +3,7 @@ import type { NpcPose } from './npcBuffer'
 
 /** Скорость, при которой качание конечностей максимально: стандартная скорость NPC (api-sunday.md §5). */
 export const FULL_SWING_SPEED_MPS = 0.6
+export const STRIDE_RAD_PER_M = 5
 const ARM_AMPLITUDE_RAD = 0.5
 const LEG_AMPLITUDE_RAD = 0.6
 const HEAD_LIMIT_RAD = Math.PI / 2
