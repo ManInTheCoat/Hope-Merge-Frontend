@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { ContentError, fetchAssetBlob, fetchGenerationByRequest, fetchGenerations, fetchManifest, fetchMe, fetchRoom, logout, uploadPhoto } from './network/api'
+import { ContentError, fetchAssetBlob, fetchGenerationByRequest, fetchGenerations, fetchManifest, fetchMe, fetchPhotoBlob, fetchPhotos, fetchRoom, logout, uploadPhoto } from './network/api'
 import { type Door, type ErrorBody, type Exhibit, type Guide } from './network/contract'
 import { closeAction, ReconnectLoop, type ConnectResult, type LinkState } from './network/reconnect'
 import { uuidV4 } from './network/uuid'
@@ -45,6 +45,10 @@ import { chatKeyAction, chatLineText } from './ui/chatLog'
 import { askErrorText, GuideAsks } from './ui/guideAsks'
 import { panelKeyAction } from './ui/guideKeys'
 import { createAdminPanel } from './ui/adminPanel'
+import { createAlbumPanel } from './ui/albumPanel'
+import { AlbumController, type AlbumState } from './album/albumController'
+import { albumKeyAction } from './album/albumKeys'
+import { albumFileName, shareBlockReason } from './album/albumText'
 import { createGuidePanel } from './ui/guidePanel'
 import { NO_CONNECTION, NO_RESPONSE, userErrorText } from './ui/errorText'
 import { createHud } from './ui/hud'
@@ -150,7 +154,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
 
   const controls = new FirstPersonControls(renderer.domElement, (locked) => {
     const s = session
-    hud.showClickOverlay(!locked && !!s?.ready && !chat.isOpen && !guidePanel.isOpen && !adminPanel.isOpen, () => controls.lock())
+    hud.showClickOverlay(!locked && !!s?.ready && !chat.isOpen && !guidePanel.isOpen && !adminPanel.isOpen && !albumPanel.isOpen, () => controls.lock())
     if (!locked) closeCard()
   })
   controls.enabled = false
@@ -316,13 +320,91 @@ export async function startGame(host: HTMLElement): Promise<void> {
     onDownload: () => downloadPhoto(),
   })
 
+  /** Альбом (B): сетка собственных фото и просмотр; живёт на бюджете текущей сессии и не требует игрового WS. */
+  let album: AlbumController | null = null
+  /** URL открытого в просмотре оригинала: нужен кнопке «Скачать». */
+  let albumUrl: string | null = null
+
+  function renderAlbum(state: AlbumState) {
+    albumUrl = state.kind === 'viewer' ? state.url : null
+    albumPanel.render(state, {
+      blockedReason: shareBlockReason({ ready: !!session?.ready, socketOpen: !!session?.socket?.isOpen }),
+    })
+  }
+
+  const albumPanel = createAlbumPanel(host, {
+    onClose: () => closeAlbum(),
+    onRetry: () => void album?.open(),
+    onPrev: () => void album?.prev(),
+    onNext: () => void album?.next(),
+    onView(photoId) {
+      // Оригинал альбома и оригинал последнего снимка вместе не помещаются в резерв фото (api.md §3).
+      lastShot = null
+      photoCard.hide()
+      session?.photo?.release()
+      void album?.view(photoId)
+    },
+    onBack: () => album?.backToGrid(),
+    onDownload() {
+      const viewed = album?.viewed
+      if (viewed && albumUrl) downloadBlob(albumUrl, albumFileName(viewed.photo))
+    },
+    async onShare(photoId) {
+      const s = session
+      const reason = shareBlockReason({ ready: !!s?.ready, socketOpen: !!s?.socket?.isOpen })
+      if (reason || !s?.socket) throw new Error(reason ?? NO_CONNECTION)
+      try {
+        await s.socket.request('chat.send', { photo_id: photoId }, 'chat.message', CHAT_SEND_TIMEOUT_MS)
+      } catch (e) {
+        throw new Error(userErrorText(e))
+      }
+      album?.markPublished(photoId)
+    },
+  })
+
+  function openAlbum() {
+    const s = session
+    if (!s?.budget || albumPanel.isOpen) return
+    hud.showHint(null)
+    controls.enabled = false
+    controls.keys.clear()
+    hud.showClickOverlay(false)
+    album = new AlbumController(
+      {
+        fetchPage: fetchPhotos,
+        fetchBlob: fetchPhotoBlob,
+        budget: s.budget,
+        makeUrl: (blob) => URL.createObjectURL(blob),
+        revokeUrl: (url) => URL.revokeObjectURL(url),
+      },
+      renderAlbum,
+    )
+    // Панель открываем до снятия захвата: обработчик pointerlockchange должен видеть её открытой.
+    albumPanel.open()
+    if (controls.locked) document.exitPointerLock()
+    void album.open()
+  }
+
+  /** Освободить память альбома и спрятать панель; управление не трогаем. */
+  function dropAlbum() {
+    album?.close()
+    album = null
+    albumUrl = null
+    albumPanel.close()
+  }
+
+  function closeAlbum() {
+    dropAlbum()
+    resumeControls(true)
+  }
+
   /** Игровые действия (движение, E, F, повтор фото) заблокированы: нет готовности, связь потеряна или идёт фото. */
   function actionsLocked(s: Session | null): boolean {
     return !s || !s.ready || s.lost || s.photoBusy
   }
 
   function canShoot(s: Session | null): s is Session {
-    return !actionsLocked(s) && !!s!.photo && controls.locked && !cardFor && !chat.isOpen && !guidePanel.isOpen && !adminPanel.isOpen
+    return !actionsLocked(s) && !!s!.photo && controls.locked && !cardFor && !chat.isOpen && !guidePanel.isOpen && !adminPanel.isOpen && !albumPanel.isOpen
   }
 
   function downloadPhoto() {
@@ -516,6 +598,20 @@ export async function startGame(host: HTMLElement): Promise<void> {
 
   document.addEventListener('keydown', (e) => {
     if (e.repeat) return
+    const albumAction = albumKeyAction(e.code, {
+      typing: typingInField(),
+      open: albumPanel.isOpen,
+      viewer: album?.isViewer ?? false,
+      blocked: loginScreen.visible || !!cardFor || chat.isOpen || guidePanel.isOpen || adminPanel.isOpen || !session?.budget || !!session?.photoBusy,
+    })
+    if (albumAction) {
+      e.preventDefault()
+      if (albumAction === 'open') openAlbum()
+      else if (albumAction === 'back') album?.backToGrid()
+      else closeAlbum()
+      return
+    }
+    if (albumPanel.isOpen) return // пока альбом открыт, игровые клавиши молчат
     const shooter = canShoot(session) ? session : null
     const photoAction = photoKeyAction(e.code, {
       typing: typingInField(),
@@ -585,6 +681,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
   function teardown(s: Session | null, reconnecting = false) {
     if (!s) return
     s.ready = false
+    dropAlbum() // бюджет этой сессии больше не действует
     s.ac.abort()
     // Отписка до выгрузки зала: иначе release при unload снова покажет строку кеша.
     s.budgetOff?.()
