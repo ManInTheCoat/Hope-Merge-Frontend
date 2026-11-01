@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { ContentError, fetchAssetBlob, fetchGenerationByRequest, fetchGenerations, fetchManifest, fetchMe, fetchPhotoBlob, fetchPhotos, fetchRoom, logout, uploadPhoto } from './network/api'
-import { type Door, type ErrorBody, type Exhibit, type Guide } from './network/contract'
+import { type Door, type ErrorBody, type Exhibit, type Guide, type Photo } from './network/contract'
 import { closeAction, ReconnectLoop, type ConnectResult, type LinkState } from './network/reconnect'
 import { uuidV4 } from './network/uuid'
 import { FpsMeter, startTelemetry } from './network/telemetry'
@@ -169,6 +169,10 @@ export async function startGame(host: HTMLElement): Promise<void> {
       } catch (e) {
         throw new Error(userErrorText(e))
       }
+    },
+    onPhoto: (photo) => {
+      chat.close() // сам по себе onClose не вызывает: управление вернёт закрытие просмотра
+      openAlbum(photo)
     },
     onClose: (sent) => resumeControls(sent),
   })
@@ -354,14 +358,11 @@ export async function startGame(host: HTMLElement): Promise<void> {
 
   const albumPanel = createAlbumPanel(host, {
     onClose: () => closeAlbum(),
-    onRetry: () => void album?.open(),
+    onRetry: () => void album?.retry(),
     onPrev: () => void album?.prev(),
     onNext: () => void album?.next(),
     onView(photoId) {
-      // Оригинал альбома и оригинал последнего снимка вместе не помещаются в резерв фото (api.md §3).
-      lastShot = null
-      photoCard.hide()
-      session?.photo?.release()
+      releaseLastShot()
       void album?.view(photoId)
     },
     onBack: () => album?.backToGrid(),
@@ -382,10 +383,18 @@ export async function startGame(host: HTMLElement): Promise<void> {
     },
   })
 
-  function openAlbum() {
+  /** Оригинал альбома и оригинал последнего снимка вместе не помещаются в резерв фото (api.md §3). */
+  function releaseLastShot() {
+    lastShot = null
+    photoCard.hide()
+    session?.photo?.release()
+  }
+
+  /** Без `single` — альбом с сеткой; с `single` — крупный просмотр одного фото (клик в чате). */
+  function openAlbum(single?: Photo) {
     const s = session
     if (!s?.budget || albumPanel.isOpen) return
-    chatThumbs?.suspend() // шесть миниатюр альбома не должны складываться с чатовыми (api.md §3)
+    if (!single) chatThumbs?.suspend() // шесть миниатюр альбома не должны складываться с чатовыми (api.md §3)
     hud.showHint(null)
     controls.enabled = false
     controls.keys.clear()
@@ -403,7 +412,10 @@ export async function startGame(host: HTMLElement): Promise<void> {
     // Панель открываем до снятия захвата: обработчик pointerlockchange должен видеть её открытой.
     albumPanel.open()
     if (controls.locked) document.exitPointerLock()
-    void album.open()
+    if (single) {
+      releaseLastShot()
+      void album.openSingle(single)
+    } else void album.open()
   }
 
   /** Освободить память альбома и спрятать панель; управление не трогаем. */
@@ -623,7 +635,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
     const albumAction = albumKeyAction(e.code, {
       typing: typingInField(),
       open: albumPanel.isOpen,
-      viewer: album?.isViewer ?? false,
+      viewer: (album?.isViewer ?? false) && !album?.isSingle, // из чата Escape закрывает всё
       blocked: loginScreen.visible || !!cardFor || chat.isOpen || guidePanel.isOpen || adminPanel.isOpen || !session?.budget || !!session?.photoBusy,
     })
     if (albumAction) {
@@ -1052,7 +1064,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
       socket.on('player.joined', ({ player }) => s.players.upsert(player, performance.now()))
       socket.on('player.left', ({ user_id }) => s.players.remove(user_id))
       socket.on('chat.message', ({ author, text, photo }) => {
-        const shot = photo ? { id: photo.id, alt: photo.caption || 'Фото', url: null as string | null } : undefined
+        const shot = photo ? { id: photo.id, alt: photo.caption || 'Фото', url: null as string | null, full: photo } : undefined
         chat.add({ author: author.display_name, color: s.players.colorOf(author.user_id), text, photo: shot })
         if (shot && photo && s.budget) chatThumbsFor(s.budget).show(shot, photo)
       })

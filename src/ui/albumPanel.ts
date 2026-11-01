@@ -104,8 +104,10 @@ export function createAlbumPanel(root: HTMLElement, h: AlbumPanelHandlers): Albu
     el('div', 'album-meta', body).textContent = `${meta.room} · ${meta.date}`
 
     const actions = el('div', 'album-actions', body)
-    button(actions, '← К альбому', h.onBack)
+    if (s.single) button(actions, 'Закрыть', h.onClose)
+    else button(actions, '← К альбому', h.onBack)
     button(actions, '⬇ Скачать', h.onDownload, !s.url)
+    if (s.single) return // фото из чата уже опубликовано, отправлять его снова не нужно
     if (s.photo.published) {
       el('span', 'album-meta', actions).textContent = 'Отправлено в чат'
       return

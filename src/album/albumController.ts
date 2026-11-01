@@ -15,7 +15,8 @@ export type AlbumState =
       busy: boolean
       notice: string | null
     }
-  | { kind: 'viewer'; photo: Photo; url: string | null; notice: string | null }
+  /** `single` — фото открыто отдельно (например, из чата), без сетки альбома. */
+  | { kind: 'viewer'; photo: Photo; url: string | null; notice: string | null; single: boolean }
 
 export type AlbumDeps = ImageDeps & { fetchPage: FetchPage }
 
@@ -33,6 +34,8 @@ export class AlbumController {
   private thumbs: ReadonlyMap<string, string> = new Map()
   private viewing: { photo: Photo; blob: Blob | null } | null = null
   private viewUrl: string | null = null
+  private single = false
+  private singlePhoto: Photo | null = null
 
   constructor(deps: AlbumDeps, onState: (s: AlbumState) => void) {
     this.pager = new AlbumPager(deps.fetchPage)
@@ -42,6 +45,11 @@ export class AlbumController {
 
   get isViewer(): boolean {
     return this.viewing !== null
+  }
+
+  /** Открыто одно фото вне альбома: «назад к сетке» нет, закрывается весь экран. */
+  get isSingle(): boolean {
+    return this.single
   }
 
   /** Оригинал открытого фото, пока он загружен (для скачивания). */
@@ -82,28 +90,50 @@ export class AlbumController {
   async view(photoId: string): Promise<void> {
     const photo = this.pager.items.find((p) => p.id === photoId)
     if (this.busy || this.viewing || !photo || !this.ac) return
+    await this.show(photo)
+  }
+
+  /** Крупный просмотр одного фото без сетки (клик по фото в чате). */
+  async openSingle(photo: Photo): Promise<void> {
+    this.reset()
+    this.single = true
+    this.singlePhoto = photo
+    await this.show(photo)
+  }
+
+  /** Повтор после ошибки: то же одиночное фото или первая страница альбома. */
+  retry(): Promise<void> {
+    return this.singlePhoto ? this.openSingle(this.singlePhoto) : this.open()
+  }
+
+  private async show(photo: Photo): Promise<void> {
     const t = this.token
     this.busy = true
     this.viewing = { photo, blob: null }
-    this.onState({ kind: 'viewer', photo, url: null, notice: null })
+    this.emitViewer(photo, null, null)
     try {
-      const { url, blob } = await this.images.openOriginal(photo, this.ac.signal)
+      const { url, blob } = await this.images.openOriginal(photo, this.ac!.signal)
       if (t !== this.token) return
       this.busy = false
       this.viewUrl = url
       this.viewing = { photo: this.viewing?.photo ?? photo, blob }
-      this.onState({ kind: 'viewer', photo: this.viewing.photo, url, notice: null })
+      this.emitViewer(this.viewing.photo, url, null)
     } catch (e) {
       if (t !== this.token) return
       this.busy = false
       this.viewing = null
       this.viewUrl = null
-      this.grid(false, userErrorText(e))
+      if (this.single) this.onState({ kind: 'error', text: userErrorText(e) })
+      else this.grid(false, userErrorText(e))
     }
   }
 
+  private emitViewer(photo: Photo, url: string | null, notice: string | null) {
+    this.onState({ kind: 'viewer', photo, url, notice, single: this.single })
+  }
+
   backToGrid(): void {
-    if (!this.viewing) return
+    if (!this.viewing || this.single) return
     this.images.closeOriginal()
     this.viewing = null
     this.viewUrl = null
@@ -119,7 +149,7 @@ export class AlbumController {
     this.pager.replace(updated)
     if (this.viewing?.photo.id === photoId) {
       this.viewing = { ...this.viewing, photo: updated }
-      this.onState({ kind: 'viewer', photo: updated, url: this.viewUrl, notice: null })
+      this.emitViewer(updated, this.viewUrl, null)
     } else if (!this.viewing) this.grid(this.busy, null)
   }
 
@@ -130,6 +160,8 @@ export class AlbumController {
     this.images.releaseAll()
     this.viewing = null
     this.viewUrl = null
+    this.single = false
+    this.singlePhoto = null
     this.thumbs = new Map()
     this.busy = false
   }

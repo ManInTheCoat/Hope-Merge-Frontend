@@ -25,7 +25,7 @@ test('лента хранит последние 100', () => {
 })
 
 test('сообщение только с фото: заглушка, пока картинки нет', () => {
-  const photo = { id: 'p', alt: '', url: null as string | null }
+  const photo = { id: 'p', alt: '', url: null as string | null, full: {} as never }
   expect(chatLineText('', photo)).toBe('[фото]')
   expect(chatLineText('подпись', photo)).toBe('подпись')
   photo.url = 'blob:1'

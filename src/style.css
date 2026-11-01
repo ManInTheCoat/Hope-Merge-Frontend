@@ -173,6 +173,7 @@ canvas {
   max-height: 96px;
   margin-top: 4px;
   border-radius: 4px;
+  cursor: zoom-in;
 }
 
 .chat-hint {

@@ -212,3 +212,43 @@ test('markPublished отмечает фото в сетке и в просмот
   if (g.kind !== 'grid') throw new Error('нужна сетка')
   expect(g.items.find((p) => p.id === 'a')?.published).toBe(true)
 })
+
+test('openSingle: просмотр одного фото без страниц, backToGrid ничего не делает, close освобождает бюджет', async () => {
+  const t = setup()
+  await t.c.openSingle(photo('z'))
+  const v = t.last()
+  if (v.kind !== 'viewer') throw new Error('нужен просмотр')
+  expect([v.photo.id, v.single, v.url !== null]).toEqual(['z', true, true])
+  expect(t.states.some((s) => s.kind === 'viewer' && s.url === null)).toBe(true)
+  expect(t.c.isSingle).toBe(true)
+  const count = t.states.length
+  t.c.backToGrid()
+  expect(t.states.length).toBe(count)
+  t.c.close()
+  expect(t.budget.used).toBe(0)
+  expect(t.live.size).toBe(0)
+  expect(t.c.isSingle).toBe(false)
+})
+
+test('openSingle: ошибка оригинала даёт error, retry пробует то же фото снова', async () => {
+  let fail = true
+  const t = setup({
+    fetchBlob: async (_u, max) => {
+      if (fail) throw new ContentError('больше объявленного')
+      return new Blob([new Uint8Array(max - 1)])
+    },
+  })
+  await t.c.openSingle(photo('z'))
+  expect(t.last().kind).toBe('error')
+  expect(t.budget.used).toBe(0)
+  fail = false
+  await t.c.retry()
+  const v = t.last()
+  expect(v.kind === 'viewer' && v.photo.id === 'z' && v.url !== null).toBe(true)
+})
+
+test('retry без одиночного просмотра заново открывает альбом', async () => {
+  const t = setup()
+  await t.c.retry()
+  expect(t.last().kind).toBe('grid')
+})

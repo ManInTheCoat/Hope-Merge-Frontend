@@ -18,7 +18,7 @@ const photo = (id: string): Photo => ({
   height: 1,
   created_at: '2026-11-01T10:00:00Z',
 })
-const target = (id: string): ChatPhoto => ({ id, alt: id, url: null })
+const target = (id: string): ChatPhoto => ({ id, alt: id, url: null, full: photo(id) })
 const tick = () => new Promise((r) => setTimeout(r, 0))
 
 function setup(fetchBlob?: (url: string, max: number) => Promise<Blob>) {
@@ -52,15 +52,15 @@ test('show загружает миниатюру, кладёт URL в строк
 
 test('больше CHAT_THUMB_MAX миниатюр не держим: самая старая заменяется текстом', async () => {
   const t = setup()
-  const lines = ['a', 'b', 'c', 'd'].map(target)
+  const lines = ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map(target)
   for (const l of lines) {
     t.thumbs.show(l, photo(l.id))
     await tick()
   }
-  expect(CHAT_THUMB_MAX).toBe(3)
-  expect(lines.map((l) => l.url !== null)).toEqual([false, true, true, true])
-  expect(t.live.size).toBe(3)
-  expect(t.budget.used).toBe(3 * 99)
+  expect(CHAT_THUMB_MAX).toBe(6)
+  expect(lines.map((l) => l.url !== null)).toEqual([false, true, true, true, true, true, true])
+  expect(t.live.size).toBe(6)
+  expect(t.budget.used).toBe(6 * 99)
 })
 
 test('suspend освобождает всё и не принимает новые, resume снова разрешает', async () => {

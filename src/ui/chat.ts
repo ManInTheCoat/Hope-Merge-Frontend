@@ -1,4 +1,5 @@
 import { inputMeta, trimWs } from './text'
+import type { Photo } from '../network/contract'
 import { CHAT_MAX_LEN, ChatLog, chatLineText, validateChatText, type ChatLine } from './chatLog'
 
 const FADE_AFTER_MS = 10_000
@@ -20,6 +21,8 @@ export type Chat = {
 export type ChatOptions = {
   /** Отправка; промис отклоняется с текстом ошибки для показа под полем. */
   onSend: (text: string) => Promise<void>
+  /** Клик по фото в ленте (чат открыт, мышь свободна): показать его крупно. */
+  onPhoto: (photo: Photo) => void
   /** Поле закрыто: `sent` — после успешной отправки, иначе по Esc. */
   onClose: (sent: boolean) => void
 }
@@ -84,6 +87,9 @@ export function createChat(root: HTMLElement, opts: ChatOptions): Chat {
           img.className = 'chat-photo'
           img.src = l.photo.url
           img.alt = l.photo.alt
+          img.title = 'Открыть крупно'
+          const full = l.photo.full
+          img.addEventListener('click', () => opts.onPhoto(full))
           row.appendChild(img)
         }
         return row

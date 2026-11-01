@@ -2,13 +2,13 @@ import type { ImageDeps } from '../album/albumImages'
 import type { Photo } from '../network/contract'
 
 /** Картинка строки чата: `url` появляется, когда миниатюра загружена, и исчезает, когда её вытеснили. */
-export type ChatPhoto = { id: string; alt: string; url: string | null }
+export type ChatPhoto = { id: string; alt: string; url: string | null; /** Само фото: по клику открывается крупно. */ full: Photo }
 
 /**
- * Не больше трёх миниатюр в чате: вместе с шестью миниатюрами альбома (пока он открыт, чатовые освобождены)
- * это не выходит за «до шести миниатюр» из api.md §3.
+ * Не больше шести миниатюр в чате: «до шести миниатюр» из api.md §3. Пока открыт альбом со своими шестью,
+ * чатовые освобождены (`suspend`), так что вместе они этот предел не превышают.
  */
-export const CHAT_THUMB_MAX = 3
+export const CHAT_THUMB_MAX = 6
 
 export const chatThumbKey = (id: string): string => `photo:chat:${id}`
 
@@ -31,8 +31,9 @@ export class ChatThumbs {
     while (this.entries.length >= CHAT_THUMB_MAX) this.drop(this.entries[0])
     try {
       this.d.budget.reserve(chatThumbKey(photo.id), photo.thumbnail_bytes)
-    } catch {
-      return // нет места в бюджете: в строке остаётся текст
+    } catch (e) {
+      console.warn('Миниатюра фото в чате не загружена: нет места в бюджете кеша', e)
+      return // в строке остаётся текст
     }
     const entry: Entry = { id: photo.id, target, url: null, dead: false }
     this.entries.push(entry)
@@ -44,8 +45,10 @@ export class ChatThumbs {
         entry.target.url = entry.url
         this.d.onChange()
       },
-      () => {
-        if (!entry.dead) this.drop(entry)
+      (e) => {
+        if (entry.dead) return
+        console.warn('Миниатюра фото в чате не загружена', photo.thumbnail_url, e)
+        this.drop(entry)
       },
     )
   }
