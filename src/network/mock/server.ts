@@ -18,6 +18,7 @@ import {
 import { wrapAngle } from '../../scene/angles'
 import { mockSpeedOk, mockSweep, mockValidPose } from './geometry'
 import { checkPhotoForm, photoFingerprint } from './photoForm'
+import { makeThumbnail } from './thumbnail'
 import type { SundayClientMetric, SundayLamp, SundayRoomConfig } from '../sunday'
 import { createAdminState } from './admin'
 import { NpcSim } from './npc'
@@ -160,7 +161,7 @@ export function createMockServer(
   }
   stored.accounts.forEach((a) => (a.pose = repairPose(a.pose, poseOk, startPose)))
   const accounts = new Map<string, Account>(stored.accounts.map((a) => [a.user.username, a]))
-  const photos = new Map<string, { photo: Photo; blob: Blob; owner: string }>()
+  const photos = new Map<string, { photo: Photo; blob: Blob; thumb: Blob; owner: string }>()
   const idempotent = new Map<string, { photo: Photo; fingerprint: string }>()
   const generations = new Map<string, Generation[]>()
   const knownGuides = new Set([...world.rooms.values()].flatMap((r) => r.room.guides.map((g) => g.id)))
@@ -356,7 +357,15 @@ export function createMockServer(
     if (method === 'GET' && path === '/photos') {
       const limit = Math.min(Math.max(Number(url.searchParams.get('limit') ?? 6), 1), 6)
       const own = [...photos.values()].filter((p) => p.owner === account.user.id).map((p) => p.photo).reverse()
-      return json(200, { items: own.slice(0, limit), next_cursor: null })
+      const cursor = url.searchParams.get('cursor')
+      let start = 0
+      if (cursor !== null) {
+        const at = own.findIndex((p) => p.id === cursor)
+        if (at < 0) return httpError(400, 'INVALID_CURSOR', 'Неверный курсор')
+        start = at + 1
+      }
+      const items = own.slice(start, start + limit)
+      return json(200, { items, next_cursor: start + limit < own.length ? items[items.length - 1].id : null })
     }
 
     const imgMatch = path.match(/^\/photos\/([^/]+)\/(image|thumbnail)$/)
@@ -365,7 +374,8 @@ export function createMockServer(
       if (!entry || (entry.owner !== account.user.id && !entry.photo.published)) {
         return httpError(404, 'NOT_FOUND', 'Фото не найдено')
       }
-      return new Response(entry.blob, { headers: { 'Content-Type': entry.blob.type, 'Cache-Control': 'no-store' } })
+      const body = imgMatch[2] === 'thumbnail' ? entry.thumb : entry.blob
+      return new Response(body, { headers: { 'Content-Type': body.type, 'Cache-Control': 'no-store' } })
     }
 
     return httpError(404, 'NOT_FOUND', 'Нет такого маршрута')
@@ -480,6 +490,7 @@ export function createMockServer(
       }
     }
 
+    const thumb = await makeThumbnail(file)
     const id = newId('photo')
     const photo: Photo = {
       id,
@@ -491,12 +502,12 @@ export function createMockServer(
       image_url: `${API_BASE}/photos/${id}/image`,
       image_bytes: file.size,
       thumbnail_url: `${API_BASE}/photos/${id}/thumbnail`,
-      thumbnail_bytes: Math.min(file.size, 128 * 1024), // миниатюра мока — условная, но в пределе api.md
+      thumbnail_bytes: thumb.size,
       width: 1920,
       height: 1080,
       created_at: now(),
     }
-    photos.set(id, { photo, blob: file, owner: account.user.id })
+    photos.set(id, { photo, blob: file, thumb, owner: account.user.id })
     idempotent.set(`${account.user.id}:${key}`, { photo, fingerprint })
     return json(201, photo)
   }

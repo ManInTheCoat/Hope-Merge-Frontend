@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { ApiError, ContentError, fetchGenerationByRequest, fetchGenerations, fetchMe, fetchRoom, readLimited, uploadPhoto } from '../src/network/api'
+import { ApiError, ContentError, fetchGenerationByRequest, fetchGenerations, fetchMe, fetchPhotoBlob, fetchPhotos, fetchRoom, readLimited, uploadPhoto } from '../src/network/api'
 
 function streamResponse(chunks: number[], headers: Record<string, string> = {}) {
   let pulled = 0
@@ -134,4 +134,49 @@ test('fetchGenerationByRequest: сегменты кодируются, 404 → n
   } finally {
     globalThis.fetch = orig
   }
+})
+
+function withFetch(handler: (url: string) => Response, run: (urls: string[]) => Promise<void>) {
+  const orig = globalThis.fetch
+  const urls: string[] = []
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    urls.push(String(input))
+    return handler(String(input))
+  }) as typeof fetch
+  return run(urls).finally(() => {
+    globalThis.fetch = orig
+  })
+}
+
+test('fetchPhotos: первая страница без курсора, следующая с закодированным курсором', async () => {
+  const page = { items: [], next_cursor: null }
+  await withFetch(
+    () => new Response(JSON.stringify(page)),
+    async (urls) => {
+      expect(await fetchPhotos(null)).toEqual(page)
+      await fetchPhotos('a b')
+      expect(urls).toEqual(['/api/v1/photos?limit=6', '/api/v1/photos?limit=6&cursor=a%20b'])
+    },
+  )
+})
+
+test('fetchPhotoBlob: не удваивает префикс API, сохраняет тип и размер', async () => {
+  await withFetch(
+    () => new Response(new Uint8Array(8), { headers: { 'Content-Type': 'image/jpeg' } }),
+    async (urls) => {
+      const blob = await fetchPhotoBlob('/api/v1/photos/p1/image', 10)
+      expect(urls).toEqual(['/api/v1/photos/p1/image'])
+      expect(blob.size).toBe(8)
+      expect(blob.type).toBe('image/jpeg')
+    },
+  )
+})
+
+test('fetchPhotoBlob: тело больше объявленного — ContentError', async () => {
+  await withFetch(
+    () => new Response(new Uint8Array(11)),
+    async () => {
+      await expect(fetchPhotoBlob('/api/v1/photos/p1/image', 10)).rejects.toBeInstanceOf(ContentError)
+    },
+  )
 })
