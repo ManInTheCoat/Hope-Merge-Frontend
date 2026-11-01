@@ -3,6 +3,7 @@ import type { Door, Exhibit, Guide, Manifest, Player } from '../network/contract
 import type { GameSocket } from '../network/ws'
 import type { LastPhoto } from '../photo/lastPhoto'
 import { PlayerRegistry } from '../players/registry'
+import { RoomSync } from '../room/sync'
 import type { MoveWorld, Vec2 } from '../scene/collision'
 import type { BuiltRoom } from '../scene/roomBuilder'
 import type { AssetBudget } from './AssetBudget'
@@ -38,6 +39,8 @@ export type Session = {
   pathBehind: boolean
   players: PlayerRegistry
   roomId: string | null
+  /** Runtime зала (Sunday v1): последний принятый снимок и лимит room.sync. */
+  sync: RoomSync
   /** Последний снимок; создаётся вместе с бюджетом подключения. */
   photo: LastPhoto | null
   /** Идут съёмка или загрузка фото: движение и переходы заблокированы. */
@@ -72,6 +75,7 @@ export function newSession(): Session {
     pathBehind: false,
     players: new PlayerRegistry(''),
     roomId: null,
+    sync: new RoomSync(null, ''),
     photo: null,
     photoBusy: false,
     joined: false,

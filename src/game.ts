@@ -29,6 +29,7 @@ import { panelKeyAction } from './ui/guideKeys'
 import { createGuidePanel } from './ui/guidePanel'
 import { NO_CONNECTION, NO_RESPONSE, userErrorText } from './ui/errorText'
 import { createHud } from './ui/hud'
+import { hasSunday, mergeGuides, RoomSync } from './room/sync'
 import { linkView } from './ui/linkView'
 import { createLoginScreen } from './ui/login'
 import { createPhotoCard } from './ui/photoCard'
@@ -559,6 +560,24 @@ export async function startGame(host: HTMLElement): Promise<void> {
     s.guides = loaded.room.guides
     s.doors = loaded.room.doors
     scene.add(s.built.group)
+    applyRuntime(s)
+  }
+
+  /**
+   * Применяет последний принятый runtime к построенному залу и к списку гидов для targeting. Без объявленного
+   * `sunday_v1`, до постройки зала или для снимка другого зала ничего не делает: снимок подождёт showRoom().
+   */
+  function applyRuntime(s: Session) {
+    const rt = s.sync.current
+    if (!rt || !hasSunday(s.manifest) || !s.built || s.built.group.name !== rt.room_id) return
+    s.built.runtime.apply(rt)
+    s.guides = mergeGuides(s.guides, rt)
+  }
+
+  /** Перечитывает состояние зала (api-sunday.md §1): ответ придёт обычным world.runtime с этим request_id. */
+  function requestRoomSync(s: Session) {
+    if (!hasSunday(s.manifest) || !s.socket || s.lost) return
+    if (s.sync.tryRequestSync(performance.now())) s.socket.send('room.sync', {})
   }
 
   function becomeReady(s: Session) {
@@ -683,6 +702,13 @@ export async function startGame(host: HTMLElement): Promise<void> {
       return { ok: false, code: m ? Number(m[1]) : null, error: e }
     }
     const { socket, snapshot } = opened
+    // Runtime приходит сразу за snapshot, а сессия создаётся позже (после затемнения): копим снимок здесь.
+    const sync = new RoomSync(snapshot.self.room_id, snapshot.world_version)
+    let live: Session | null = null
+    socket.on('world.entered', ({ self }) => sync.enter(self.room_id))
+    socket.on('world.runtime', (rt) => {
+      if (sync.accept(rt) && live && !live.lost) applyRuntime(live)
+    })
     if (!isCurrent()) {
       socket.close()
       return { ok: false, code: null, error: new Error('CANCELLED') }
@@ -697,6 +723,8 @@ export async function startGame(host: HTMLElement): Promise<void> {
     const s = newSession()
     session = s
     s.socket = socket
+    s.sync = sync
+    live = s
     let closedCode: number | null = null
     try {
       s.selfId = snapshot.self.user_id
@@ -729,6 +757,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
         }
       })
       socket.on('error', (body, env) => {
+        if (body.code === 'REVISION_CONFLICT') requestRoomSync(s) // чужая правка успела раньше: читаем актуальное
         // Ошибки без request_id относятся к player.move: сервер отклонил структуру шага.
         if (!env.request_id) return console.warn('Сервер отклонил player.move:', body.code, body.message)
         askFailed(env.request_id, askErrorText(body))
@@ -863,6 +892,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
       }
       if (s.roomId) view.update(s.players, s.roomId, now, camera)
       // Табличка — дочерний узел повёрнутой фигуры гида: мировой поворот к камере задаём через родителя.
+      s.built.runtime.update(dt)
       for (const actor of s.built.guides) {
         actor.update(dt, s.path.sent)
         const label = actor.label

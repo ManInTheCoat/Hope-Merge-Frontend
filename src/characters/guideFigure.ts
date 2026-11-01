@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import type { GuideActor, GuideFactory } from '../scene/roomBuilder'
-import { makeGuideLabel } from '../scene/labels'
+import { disposeLabel, makeGuideLabel } from '../scene/labels'
 import { buildAccessory } from './accessories'
 import { guideLook, pickModel } from './catalog'
 import { blobShadow, type CharacterLibrary } from './library'
@@ -35,23 +35,30 @@ export function createGuideActor(library: CharacterLibrary): GuideFactory {
     }
     const object = new THREE.Group()
     object.position.set(g.position.x, g.position.y, g.position.z)
-    const restYaw = g.rotation_y + Math.PI
+    // Положение и поворот меняет runtime: актуальные значения лежат здесь, а не в исходном описании.
+    const at = { x: g.position.x, z: g.position.z }
+    let restYaw = g.rotation_y + Math.PI
     figure.root.rotation.y = restYaw
     const shadow = blobShadow()
-    const label = makeGuideLabel(g.display_name, g.subtitle, LABEL_WIDTH_M, look?.accent ?? '#8a8a8a')
-    label.position.y = LABEL_HEIGHT_M
-    object.add(figure.root, shadow, label)
+    const accent = look?.accent ?? '#8a8a8a'
+    const makeLabel = (name: string, subtitle: string) => {
+      const l = makeGuideLabel(name, subtitle, LABEL_WIDTH_M, accent)
+      l.position.y = LABEL_HEIGHT_M
+      return l
+    }
+    const label0 = makeLabel(g.display_name, g.subtitle)
+    object.add(figure.root, shadow, label0)
 
     let wasNear = false
-    return {
+    const actor: GuideActor = {
       id: g.id,
       object,
-      label,
+      label: label0,
       update(dtS, player) {
         let targetYaw = restYaw
         const near =
-          !!player && Math.hypot(player.x - g.position.x, player.z - g.position.z) <= g.interaction_radius_m
-        if (near && player) targetYaw = Math.atan2(-(player.x - g.position.x), -(player.z - g.position.z))
+          !!player && Math.hypot(player.x - at.x, player.z - at.z) <= g.interaction_radius_m
+        if (near && player) targetYaw = Math.atan2(-(player.x - at.x), -(player.z - at.z))
         const diff = wrap(targetYaw - figure.root.rotation.y)
         const step = TURN_SPEED * dtS
         figure.root.rotation.y += Math.abs(diff) <= step ? diff : Math.sign(diff) * step
@@ -63,11 +70,28 @@ export function createGuideActor(library: CharacterLibrary): GuideFactory {
       greet() {
         figure.play('emote-yes', 0.15, true)
       },
+      place(position, rotationY) {
+        object.position.set(position.x, position.y, position.z)
+        at.x = position.x
+        at.z = position.z
+        const next = rotationY + Math.PI
+        // Гид стоял в позе покоя: разворачиваем сразу; если он уже повернулся к игроку, update() вернёт его сам.
+        if (next !== restYaw && Math.abs(wrap(figure.root.rotation.y - restYaw)) < 1e-6) figure.root.rotation.y = next
+        restYaw = next
+      },
+      rename(displayName, subtitle) {
+        const old = actor.label
+        actor.label = makeLabel(displayName, subtitle)
+        object.add(actor.label)
+        object.remove(old)
+        disposeLabel(old)
+      },
       dispose() {
         // Корень фигурки и тень — общие ресурсы библиотеки: убираем до обхода dispose() зала.
         figure.dispose()
         shadow.removeFromParent()
       },
     }
+    return actor
   }
 }

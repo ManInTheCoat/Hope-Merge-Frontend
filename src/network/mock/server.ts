@@ -18,6 +18,8 @@ import {
 import { wrapAngle } from '../../scene/angles'
 import { mockSpeedOk, mockSweep, mockValidPose } from './geometry'
 import { checkPhotoForm, photoFingerprint } from './photoForm'
+import type { SundayLamp, SundayRoomConfig } from '../sunday'
+import { defaultRuntime } from './runtime'
 import { loadMockState, mergeMockState, repairPose, saveMockState, type StoredAccount } from './storage'
 import { START_POSITION, START_ROOM_ID, WORLD_VERSION, type MockWorld } from './world'
 
@@ -34,6 +36,8 @@ const BOT_CHAT_EVERY_MS = 30_000
 const BOT_REPLIES = ['Интересно!', 'Я тоже здесь впервые', 'Посмотрите на амфору у северной стены', 'Согласен', 'Красиво тут']
 const CHAT_LIMIT = 5
 const CHAT_WINDOW_MS = 10_000
+const SYNC_LIMIT = 2
+const SYNC_WINDOW_MS = 10_000
 /** Код, который браузер видит при отказе upgrade (например, HTTP 401 до открытия WS). */
 const ABNORMAL_CLOSE = 1006
 /** Позиция сохраняется раз в 5 секунд и при штатном отключении (api.md §2). */
@@ -51,6 +55,7 @@ const WS_FIELDS: Record<string, Record<string, string>> = {
   'exhibit.inspect': { exhibit_id: 'string' },
   'guide.ask': { guide_id: 'string', text: 'string', exhibit_id: '?string' },
   'guide.cancel': { generation_id: 'string' },
+  'room.sync': {},
 }
 
 /** Ровно эти поля нужных типов: лишние и отсутствующие обязательные — VALIDATION_ERROR. */
@@ -70,6 +75,11 @@ export type MockServer = {
   WebSocket: typeof WebSocket
   /** Закрыть текущее игровое соединение кодом `code`: ручная проверка переподключения (api.md §4). */
   drop(code: number): void
+  /**
+   * Меняет runtime текущего зала игрока (revision + 1) и рассылает полный снимок: ручная проверка из консоли,
+   * пока нет админки (у сервера это PUT /admin/rooms/{id}).
+   */
+  patchRuntime(patch: { config?: Partial<SundayRoomConfig>; lamp?: Partial<SundayLamp> }): void
 }
 
 function json(status: number, body?: unknown, headers: Record<string, string> = {}): Response {
@@ -132,6 +142,10 @@ export function createMockServer(world: MockWorld, storage: Storage | null = nul
   let socket: MockSocket | null = null
   /** Время отправки сообщений чата по user_id: окно не сбрасывается переподключением (api.md §9). */
   const chatSends = new Map<string, number[]>()
+  /** Время room.sync по user_id (api-sunday.md §8: не больше 2 за 10 с). */
+  const syncs = new Map<string, number[]>()
+  /** Runtime залов: у сервера он в PostgreSQL, здесь — в памяти вкладки. */
+  const runtimes = new Map([...world.rooms].map(([id, r]) => [id, defaultRuntime(r.room)]))
 
   const now = () => new Date().toISOString()
   const newId = (prefix: string) => `${prefix}_${crypto.randomUUID().slice(0, 8)}`
@@ -367,6 +381,9 @@ export function createMockServer(world: MockWorld, storage: Storage | null = nul
 
     ready = false
     epoch = 1
+    get currentRoomId(): string | null {
+      return this.self?.room_id ?? null
+    }
     private ackSeq = 0
     /** Время последнего обработанного move текущего epoch; сбрасывается первым world.ready epoch. */
     private lastMoveAt = 0
@@ -407,6 +424,7 @@ export function createMockServer(world: MockWorld, storage: Storage | null = nul
           players: [],
           current_room: world.rooms.get(pose.room_id)!.pkg,
         })
+        this.send_('world.runtime', runtimes.get(pose.room_id)!) // сразу за snapshot (api-sunday.md §1)
         this.stateTimer = setInterval(() => this.broadcastState(), 100)
         this.later(() => this.botJoin(), BOT_JOIN_DELAY_MS)
         this.later(() => this.botChatLoop(), BOT_CHAT_EVERY_MS)
@@ -492,6 +510,11 @@ export function createMockServer(world: MockWorld, storage: Storage | null = nul
         if (this.readyState !== 1) return
         this.emit(new MessageEvent('message', { data: JSON.stringify(env) }), this.onmessage)
       }, 0)
+    }
+
+    /** Рассылает runtime зала, если игрок сейчас в нём (без request_id, как спонтанное обновление). */
+    pushRuntime(roomId: string) {
+      if (this.self?.room_id === roomId) this.send_('world.runtime', runtimes.get(roomId)!)
     }
 
     private error(code: string, message: string, request_id?: string, extra: Partial<ErrorBody> = {}) {
@@ -608,7 +631,19 @@ export function createMockServer(world: MockWorld, storage: Storage | null = nul
           })
           acc.pose = { room_id: self.room_id, position: { ...spawn }, rotation: { yaw: 0, pitch: 0 } }
           persist() // переход сохраняется до подтверждения (api.md §2)
-          return this.send_('world.entered', { self, current_room: world.rooms.get(door.target_room_id)!.pkg }, rid)
+          this.send_('world.entered', { self, current_room: world.rooms.get(door.target_room_id)!.pkg }, rid)
+          return this.send_('world.runtime', runtimes.get(door.target_room_id)!) // world.entered опережает runtime
+        }
+        case 'room.sync': {
+          // Требует owning WS, но не ready; состояния не меняет. Ответ — полный снимок с request_id запроса.
+          const nowMs = clock()
+          const sent = (syncs.get(acc.user.id) ?? []).filter((t) => nowMs - t < SYNC_WINDOW_MS)
+          syncs.set(acc.user.id, sent)
+          if (sent.length >= SYNC_LIMIT) {
+            return this.error('RATE_LIMITED', 'Слишком часто', rid, { retry_after_ms: Math.ceil(SYNC_WINDOW_MS - (nowMs - sent[0])) })
+          }
+          sent.push(nowMs)
+          return this.send_('world.runtime', runtimes.get(self.room_id)!, rid)
         }
         case 'chat.send': {
           const text = (msg.payload.text ?? '').trim()
@@ -757,5 +792,18 @@ export function createMockServer(world: MockWorld, storage: Storage | null = nul
   } as unknown as typeof WebSocket
   Object.assign(WebSocketMock, { CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3 })
 
-  return { fetch: fetchMock, WebSocket: WebSocketMock, drop: (code) => socket?.serverClose(code) }
+  return {
+    fetch: fetchMock,
+    WebSocket: WebSocketMock,
+    drop: (code) => socket?.serverClose(code),
+    patchRuntime(patch) {
+      const roomId = socket?.currentRoomId
+      const rt = roomId ? runtimes.get(roomId) : undefined
+      if (!roomId || !rt) return
+      Object.assign(rt.config, patch.config)
+      Object.assign(rt.lamp, patch.lamp)
+      rt.revision += 1
+      socket!.pushRuntime(roomId)
+    },
+  }
 }

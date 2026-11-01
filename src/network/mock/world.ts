@@ -166,6 +166,7 @@ export async function buildWorld(image: (label: string, hue: number) => Promise<
     total_content_bytes: MOCK_TOTAL_CONTENT_BYTES,
     client_cache_limit_bytes: Math.floor(MOCK_TOTAL_CONTENT_BYTES / 10),
     max_loaded_rooms: 1,
+    extensions: ['sunday_v1'],
     photo_reserve_bytes: 3145728,
     movement: {
       send_rate_hz: 10,

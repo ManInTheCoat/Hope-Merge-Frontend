@@ -62,3 +62,15 @@ export function makeGuideLabel(name: string, subtitle: string, widthM: number, a
     new THREE.MeshBasicMaterial({ map: texture, transparent: true, toneMapped: false }),
   )
 }
+
+/** Освобождает меши подписи: геометрию, материал и текстуру. */
+export function disposeLabel(label: THREE.Object3D): void {
+  label.traverse((o) => {
+    const mesh = o as THREE.Mesh
+    if (!mesh.isMesh) return
+    mesh.geometry.dispose()
+    const mat = mesh.material as THREE.MeshBasicMaterial
+    mat.map?.dispose()
+    mat.dispose()
+  })
+}
