@@ -101,7 +101,7 @@ test('pickDoor: высота не учитывается', () => {
 
 const guide = (x: number, z: number): Guide => ({
   id: 'g',
-  display_name: 'Куратор',
+  display_name: 'Гид',
   subtitle: '',
   position: { x, y: 0, z },
   rotation_y: 0,

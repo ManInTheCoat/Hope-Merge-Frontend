@@ -105,10 +105,11 @@ export async function buildWorld(image: (label: string, hue: number) => Promise<
     addAsset('asset_map', 'Карта', 140),
   ])
 
-  const guide = (id: string, x: number, z: number) => ({
+  // У каждого зала свой гид: личность (guide.id) задаёт историю и память диалога (api.md §3, §7).
+  const guide = (id: string, subtitle: string, x: number, z: number) => ({
     id,
-    display_name: 'Куратор',
-    subtitle: 'Расскажет о залах и экспонатах',
+    display_name: 'Гид',
+    subtitle,
     position: { x, y: 0, z },
     rotation_y: 0,
     interaction_radius_m: 3 as const,
@@ -127,7 +128,7 @@ export async function buildWorld(image: (label: string, hue: number) => Promise<
         exhibit('exhibit_bust', 'Бюст императора', 'Рим, I век н. э. Мрамор, копия греческого оригинала.', 'asset_bust', 0),
         exhibit('exhibit_fresco', 'Фреска из Помпей', 'I век н. э. Сад с птицами, найдена при раскопках виллы.', 'asset_fresco', 3),
       ],
-      guides: [guide('guide_curator', 3, -3)],
+      guides: [guide('guide_antiquity', 'Расскажет о зале античности', 3, -3)],
     },
     {
       id: 'hall_medieval',
@@ -140,7 +141,7 @@ export async function buildWorld(image: (label: string, hue: number) => Promise<
         exhibit('exhibit_icon', 'Икона XV века', 'Северная Русь. Темпера по дереву, золотой фон.', 'asset_icon', -2),
         exhibit('exhibit_map', 'Карта торговых путей', 'XIV век. Пергамент, маршруты между портами.', 'asset_map', 2),
       ],
-      guides: [guide('guide_curator', -3, -3)],
+      guides: [guide('guide_medieval', 'Расскажет о зале Средневековья', -3, -3)],
     },
   ]
 

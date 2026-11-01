@@ -42,7 +42,7 @@ const room: Room = {
       interaction_radius_m: 3,
     },
   ],
-  guides: [{ id: 'guide_1', display_name: 'Куратор', subtitle: '', position: { x: 3, y: 0, z: -3 }, rotation_y: 0, interaction_radius_m: 3 }],
+  guides: [{ id: 'guide_1', display_name: 'Гид', subtitle: '', position: { x: 3, y: 0, z: -3 }, rotation_y: 0, interaction_radius_m: 3 }],
 }
 
 const stubLabel = () => new THREE.Group()
@@ -165,7 +165,7 @@ test('без стены рядом дверь смотрит к центру з�
 test('таблички гидов отдаются наружу, чтобы поворачивать их к камере', () => {
   const r: Room = {
     ...room,
-    guides: [{ id: 'g', display_name: 'Куратор', subtitle: '', position: { x: 0, y: 0, z: 0 }, rotation_y: 0, interaction_radius_m: 3 }],
+    guides: [{ id: 'g', display_name: 'Гид', subtitle: '', position: { x: 0, y: 0, z: 0 }, rotation_y: 0, interaction_radius_m: 3 }],
   }
   expect(buildRoom(r, new Map(), stubLabel).guideLabels.length).toBe(1)
 })

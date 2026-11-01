@@ -129,7 +129,7 @@ test('пароль: 129 байт отклонён, 40 кириллических
 test('история неизвестного гида — 404; by-request — генерация или 404', async () => {
   const j = await joined()
   expect((await j.http('GET', '/guides/nobody/generations?limit=20')).status).toBe(404)
-  expect((await j.http('GET', `/guides/guide_curator/generations/by-request/${crypto.randomUUID()}`)).status).toBe(404)
+  expect((await j.http('GET', `/guides/guide_antiquity/generations/by-request/${crypto.randomUUID()}`)).status).toBe(404)
   // Подходим к гиду (3, -3) с запасом по скорости и спрашиваем.
   let { x, z } = j.snapshot.self.position
   let seq = 0
@@ -141,10 +141,10 @@ test('история неизвестного гида — 404; by-request — �
     move(j, ++seq, x, z)
   }
   const rid = crypto.randomUUID()
-  j.send('guide.ask', { guide_id: 'guide_curator', text: 'Привет' }, rid)
+  j.send('guide.ask', { guide_id: 'guide_antiquity', text: 'Привет' }, rid)
   await tick()
   expect(j.inbox.find((e) => e.request_id === rid)?.type).toBe('guide.accepted')
-  const res = await j.http('GET', `/guides/guide_curator/generations/by-request/${rid}`)
+  const res = await j.http('GET', `/guides/guide_antiquity/generations/by-request/${rid}`)
   expect(res.status).toBe(200)
   expect(((await res.json()) as { request_id: string }).request_id).toBe(rid)
 })
@@ -177,14 +177,14 @@ function walkTo(j: Awaited<ReturnType<typeof joined>>, tx: number, tz: number, w
 async function asked(j: Awaited<ReturnType<typeof joined>>) {
   const seq = walkTo(j, 3, -3, 2)
   const rid = crypto.randomUUID()
-  j.send('guide.ask', { guide_id: 'guide_curator', text: 'Кто автор?' }, rid)
+  j.send('guide.ask', { guide_id: 'guide_antiquity', text: 'Кто автор?' }, rid)
   await tick()
   const gen = j.inbox.find((e) => e.request_id === rid && e.type === 'guide.accepted')!.payload.generation as { id: string }
   return { rid, genId: gen.id, seq }
 }
 
 async function history(j: Awaited<ReturnType<typeof joined>>) {
-  const res = await j.http('GET', '/guides/guide_curator/generations?limit=20')
+  const res = await j.http('GET', '/guides/guide_antiquity/generations?limit=20')
   return ((await res.json()) as { items: Array<{ id: string; status: string; error: { code: string } | null }> }).items
 }
 
@@ -228,7 +228,7 @@ test('второй вопрос до завершения первого — GUI
   const j = await joined()
   await asked(j)
   const rid = crypto.randomUUID()
-  j.send('guide.ask', { guide_id: 'guide_curator', text: 'И ещё' }, rid)
+  j.send('guide.ask', { guide_id: 'guide_antiquity', text: 'И ещё' }, rid)
   await tick()
   expect(j.inbox.find((e) => e.request_id === rid)?.payload.code).toBe('GUIDE_BUSY')
 })

@@ -19,7 +19,7 @@ function gen(id: string, status: GenerationStatus, extra: Partial<Generation> = 
 const answer = (text: string) => ({ id: 'a', role: 'assistant' as const, text, created_at: '' })
 
 function asking(asks = new GuideAsks()) {
-  asks.start({ requestId: 'r1', guideId: 'g1', guideName: 'Куратор', question: 'Кто автор?' })
+  asks.start({ requestId: 'r1', guideId: 'g1', guideName: 'Гид', question: 'Кто автор?' })
   return asks
 }
 
@@ -108,10 +108,10 @@ test('rejected после accepted не снимает вопрос', () => {
   expect(asks.active?.generationId).toBe('gen1')
 })
 
-test('статус у другого гида — «Ждём ответ: Куратор»', () => {
+test('статус у другого гида — «Ждём ответ: Гид»', () => {
   const asks = asking()
   asks.accepted('r1', live('running'))
-  expect(asks.status('g2')).toEqual({ text: 'Ждём ответ: Куратор', canCancel: true })
+  expect(asks.status('g2')).toEqual({ text: 'Ждём ответ: Гид', canCancel: true })
   expect(asks.entries('g2', [])).toEqual([])
 })
 
