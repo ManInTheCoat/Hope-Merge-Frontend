@@ -121,7 +121,7 @@ export async function buildWorld(image: (label: string, hue: number) => Promise<
       world_version: WORLD_VERSION,
       title: 'Зал античности',
       bounds: { min: { x: -HALF_W, y: 0, z: -HALF_D }, max: { x: HALF_W, y: HEIGHT, z: HALF_D } },
-      surfaces: buildSurfaces('antiquity', '#d8d2c4', '#8b7d6b'),
+      surfaces: buildSurfaces('antiquity', '#f2f0ec', '#9a9893'),
       doors: [door('door_antiquity_to_medieval', 'hall_medieval', 'В зал Средневековья')],
       exhibits: [
         exhibit('exhibit_vase', 'Краснофигурная амфора', 'Афины, V век до н. э. Сцена пира, роспись по обожжённой глине.', 'asset_vase', -3),
@@ -135,7 +135,7 @@ export async function buildWorld(image: (label: string, hue: number) => Promise<
       world_version: WORLD_VERSION,
       title: 'Зал Средневековья',
       bounds: { min: { x: -HALF_W, y: 0, z: -HALF_D }, max: { x: HALF_W, y: HEIGHT, z: HALF_D } },
-      surfaces: buildSurfaces('medieval', '#b9c2c9', '#5c5f66'),
+      surfaces: buildSurfaces('medieval', '#f2f0ec', '#9a9893'),
       doors: [door('door_medieval_to_antiquity', START_ROOM_ID, 'Назад в зал античности')],
       exhibits: [
         exhibit('exhibit_icon', 'Икона XV века', 'Северная Русь. Темпера по дереву, золотой фон.', 'asset_icon', -2),

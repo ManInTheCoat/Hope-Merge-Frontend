@@ -12,6 +12,8 @@ import { PlayerRegistry } from './players/registry'
 import { RemotePlayersView } from './players/view'
 import { CharacterLibrary } from './characters/library'
 import { createGuideActor } from './characters/guideFigure'
+import { createGalleryLook } from './scene/galleryLook'
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import { activeColliders, moveCylinder } from './scene/collision'
 import { FirstPersonControls, typingInField } from './scene/controls'
 import { CLIENT_SPEED_FACTOR, moveSendBudget, moveVector, shouldSendMove } from './scene/input'
@@ -52,10 +54,17 @@ export async function startGame(host: HTMLElement): Promise<void> {
   const renderer = new THREE.WebGLRenderer({ antialias: true })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5))
   renderer.shadowMap.enabled = false
+  renderer.toneMapping = THREE.ACESFilmicToneMapping
+  renderer.toneMappingExposure = 0.95
   host.appendChild(renderer.domElement)
 
   const scene = new THREE.Scene()
   scene.background = new THREE.Color(0x1a1a1f)
+  // Окружение для мягких отражений на бетоне и рамах: генерируется кодом один раз за сеанс страницы.
+  const pmrem = new THREE.PMREMGenerator(renderer)
+  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture
+  scene.environmentIntensity = 0.5
+  pmrem.dispose()
   const camera = new THREE.PerspectiveCamera(70, 1, 0.1, 100)
   camera.rotation.order = 'YXZ'
 
@@ -529,6 +538,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
   function showRoom(s: Session, loaded: LoadedRoom) {
     s.built = buildRoom(loaded.room, loaded.bitmaps, undefined, {
       guideFactory: characters ? createGuideActor(characters) : undefined,
+      look: createGalleryLook(),
     })
     s.moveWorld = {
       colliders: activeColliders(s.built.colliders, s.manifest?.movement.player_height_m ?? 1.8),

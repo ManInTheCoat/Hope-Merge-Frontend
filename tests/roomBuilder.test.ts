@@ -193,3 +193,19 @@ test('фигурки гидов строит фабрика и освобожд�
   built.dispose()
   expect(disposed).toEqual(['g1', 'g2'])
 })
+
+test('оформление зала: материал на каждый блок, dispose() освобождает оформление', () => {
+  let surfaces = 0
+  let disposed = 0
+  const built = buildRoom(room, new Map(), stubLabel, {
+    look: {
+      surface: () => (surfaces++, new THREE.MeshBasicMaterial()),
+      exhibitFrame: () => new THREE.Group(),
+      lightPool: () => null,
+      dispose: () => void disposed++,
+    },
+  })
+  expect(surfaces).toBe(room.surfaces.length)
+  built.dispose()
+  expect(disposed).toBe(1)
+})
