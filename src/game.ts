@@ -3,6 +3,7 @@ import { ContentError, fetchAssetBlob, fetchGenerationByRequest, fetchGeneration
 import { type Door, type ErrorBody, type Exhibit, type Guide } from './network/contract'
 import { closeAction, ReconnectLoop, type ConnectResult, type LinkState } from './network/reconnect'
 import { uuidV4 } from './network/uuid'
+import { FpsMeter, startTelemetry } from './network/telemetry'
 import { GameSocket } from './network/ws'
 import { canvasEncoder, copyFrame, encodeUnderLimit } from './photo/frame'
 import { photoKeyAction } from './photo/keys'
@@ -83,6 +84,8 @@ export async function startGame(host: HTMLElement): Promise<void> {
   const hand = new HandCamera()
   /** Сглаженная доля скорости ходьбы для покачивания фотоаппарата. */
   let walkBlend = 0
+  /** Средний FPS для `client.metrics`: считает все кадры rAF, отчёт уходит раз в 2 с. */
+  const fpsMeter = new FpsMeter()
   // Версия мира и лимит кеша известны только после snapshot и манифеста, поэтому менеджер — на каждое подключение.
   const makeRooms = (version: string, budget: AssetBudget) =>
     new RoomManager({
@@ -702,6 +705,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
       return { ok: false, code: m ? Number(m[1]) : null, error: e }
     }
     const { socket, snapshot } = opened
+    startTelemetry(socket, fpsMeter) // metrics и pong разрешены до ready; остановится вместе с сокетом
     // Runtime приходит сразу за snapshot, а сессия создаётся позже (после затемнения): копим снимок здесь.
     const sync = new RoomSync(snapshot.self.room_id, snapshot.world_version)
     let live: Session | null = null
@@ -842,6 +846,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
   const labelParentQ = new THREE.Quaternion()
   let last = performance.now()
   renderer.setAnimationLoop((now) => {
+    fpsMeter.frame()
     const dt = Math.min((now - last) / 1000, MAX_FRAME_DT)
     // Длинный кадр — вкладка была скрыта или идёт загрузка зала: в замер FPS не берём.
     const rawDt = (now - last) / 1000

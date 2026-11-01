@@ -18,7 +18,7 @@ import {
 import { wrapAngle } from '../../scene/angles'
 import { mockSpeedOk, mockSweep, mockValidPose } from './geometry'
 import { checkPhotoForm, photoFingerprint } from './photoForm'
-import type { SundayLamp, SundayRoomConfig } from '../sunday'
+import type { SundayClientMetric, SundayLamp, SundayRoomConfig } from '../sunday'
 import { defaultRuntime } from './runtime'
 import { loadMockState, mergeMockState, repairPose, saveMockState, type StoredAccount } from './storage'
 import { START_POSITION, START_ROOM_ID, WORLD_VERSION, type MockWorld } from './world'
@@ -40,6 +40,15 @@ const SYNC_LIMIT = 2
 const SYNC_WINDOW_MS = 10_000
 /** Код, который браузер видит при отказе upgrade (например, HTTP 401 до открытия WS). */
 const ABNORMAL_CLOSE = 1006
+/** `telemetry.probe` уходит раз в 5 с после snapshot; без ответа за это же время ping становится null (api-sunday.md §7). */
+const PROBE_EVERY_MS = 5_000
+const PING_TIMEOUT_MS = 5_000
+/** FPS протухает через 6 с без валидного `client.metrics`. */
+const METRICS_STALE_MS = 6_000
+/** Предел каждого типа telemetry: 2 в секунду на соединение, лишние валидные отбрасываются молча. */
+const TELEMETRY_LIMIT = 2
+const TELEMETRY_WINDOW_MS = 1_000
+const TELEMETRY_TYPES: ReadonlySet<string> = new Set(['client.metrics', 'telemetry.pong'])
 /** Позиция сохраняется раз в 5 секунд и при штатном отключении (api.md §2). */
 const POSE_SAVE_EVERY_MS = 5_000
 
@@ -80,6 +89,8 @@ export type MockServer = {
    * пока нет админки (у сервера это PUT /admin/rooms/{id}).
    */
   patchRuntime(patch: { config?: Partial<SundayRoomConfig>; lamp?: Partial<SundayLamp> }): void
+  /** Что видит админка в GET /admin/clients: FPS, ping и видимость вкладки текущего соединения (пусто без соединения). */
+  clients(): SundayClientMetric[]
 }
 
 function json(status: number, body?: unknown, headers: Record<string, string> = {}): Response {
@@ -96,8 +107,13 @@ function httpError(status: number, code: string, message: string): Response {
   return json(status, { error: { code, message, request_id } }, { 'X-Request-ID': request_id })
 }
 
-/** `opts.now` — часы для проверки скорости движения (в тестах — ручные). */
-export function createMockServer(world: MockWorld, storage: Storage | null = null, opts: { now?: () => number } = {}): MockServer {
+/** `opts.now` — часы для проверки скорости движения и RTT (в тестах — ручные); `opts.probeEveryMs` — период probe. */
+export function createMockServer(
+  world: MockWorld,
+  storage: Storage | null = null,
+  opts: { now?: () => number; probeEveryMs?: number } = {},
+): MockServer {
+  const probeEveryMs = opts.probeEveryMs ?? PROBE_EVERY_MS
   const clock = opts.now ?? (() => performance.now())
   const stored = loadMockState(storage)
   const startPose = { room_id: START_ROOM_ID, position: { ...START_POSITION }, rotation: { yaw: 0, pitch: 0 } }
@@ -391,7 +407,84 @@ export function createMockServer(world: MockWorld, storage: Storage | null = nul
     private seenRequests = new Set<string>()
     private timers = new Set<ReturnType<typeof setTimeout | typeof setInterval>>()
     private stateTimer: ReturnType<typeof setInterval> | null = null
+    private probeTimer: ReturnType<typeof setInterval> | null = null
     private bot: Player
+
+    // --- FPS и ping (api-sunday.md §7): данные живут столько же, сколько соединение ---
+
+    private metrics: { fps: number | null; visible: boolean; at: number | null; iso: string | null } = {
+      fps: null,
+      visible: false,
+      at: null,
+      iso: null,
+    }
+    private pingMs: number | null = null
+    /** Единственный неотвеченный probe соединения. */
+    private probe: { nonce: string; sentAt: number } | null = null
+    private telemetrySeen = new Map<string, number[]>()
+
+    private sendProbe() {
+      const nonce = crypto.randomUUID()
+      this.probe = { nonce, sentAt: clock() }
+      this.send_('telemetry.probe', { nonce })
+    }
+
+    /** Строка для админки; протухшее не показывает: FPS через 6 с → null, ping через 5 с без ответа → null. */
+    metricsRow(): SundayClientMetric | null {
+      const self = this.self
+      if (!self || this.readyState !== 1) return null
+      const t = clock()
+      const m = this.metrics
+      const stale = m.at === null || t - m.at >= METRICS_STALE_MS
+      const pingLost = this.probe !== null && t - this.probe.sentAt >= PING_TIMEOUT_MS
+      return {
+        user_id: self.user_id,
+        display_name: self.display_name,
+        room_id: self.room_id,
+        fps: stale ? null : m.fps,
+        ping_ms: pingLost ? null : this.pingMs,
+        visible: m.visible,
+        sampled_at: m.iso,
+        stale,
+      }
+    }
+
+    /** `client.metrics` и `telemetry.pong`: без request_id, вне дедупликации и лимита команд, до ready тоже. */
+    private telemetry(msg: ClientEnvelope) {
+      const p: unknown = msg.payload
+      const obj = typeof p === 'object' && p !== null && !Array.isArray(p) ? (p as Record<string, unknown>) : null
+      const keysOk = (allowed: string[]) => !!obj && Object.keys(obj).every((k) => allowed.includes(k))
+      let valid = false
+      if (msg.type === 'client.metrics') {
+        valid =
+          keysOk(['fps', 'visible']) &&
+          typeof obj!.visible === 'boolean' &&
+          (obj!.visible
+            ? typeof obj!.fps === 'number' && Number.isFinite(obj!.fps) && obj!.fps >= 0 && obj!.fps <= 1000
+            : obj!.fps === null)
+      } else {
+        valid = keysOk(['nonce']) && typeof obj!.nonce === 'string' && obj!.nonce !== ''
+      }
+      if (!valid) return this.error('VALIDATION_ERROR', 'Некорректные поля')
+
+      const t = clock()
+      const seen = (this.telemetrySeen.get(msg.type) ?? []).filter((x) => t - x < TELEMETRY_WINDOW_MS)
+      this.telemetrySeen.set(msg.type, seen)
+      if (seen.length >= TELEMETRY_LIMIT) return // лишнее валидное — молча
+      seen.push(t)
+
+      if (msg.type === 'client.metrics') {
+        const m = msg.payload as { fps: number | null; visible: boolean }
+        this.metrics = { fps: m.fps, visible: m.visible, at: t, iso: now() }
+        return
+      }
+      const nonce = (msg.payload as { nonce: string }).nonce
+      const pending = this.probe
+      if (!pending || pending.nonce !== nonce) return // чужой или повторный nonce
+      this.probe = null
+      if (t - pending.sentAt >= PING_TIMEOUT_MS) return // ответ позже 5 с: ping уже null
+      this.pingMs = Math.max(0, t - pending.sentAt)
+    }
 
     readonly url: string
 
@@ -426,6 +519,7 @@ export function createMockServer(world: MockWorld, storage: Storage | null = nul
         })
         this.send_('world.runtime', runtimes.get(pose.room_id)!) // сразу за snapshot (api-sunday.md §1)
         this.stateTimer = setInterval(() => this.broadcastState(), 100)
+        this.probeTimer = setInterval(() => this.sendProbe(), probeEveryMs)
         this.later(() => this.botJoin(), BOT_JOIN_DELAY_MS)
         this.later(() => this.botChatLoop(), BOT_CHAT_EVERY_MS)
       }
@@ -542,6 +636,7 @@ export function createMockServer(world: MockWorld, storage: Storage | null = nul
       this.readyState = 3
       this.ready = false
       if (this.stateTimer) clearInterval(this.stateTimer)
+      if (this.probeTimer) clearInterval(this.probeTimer)
       this.timers.forEach((t) => clearTimeout(t))
       this.timers.clear()
       if (socket === this) socket = null
@@ -567,6 +662,7 @@ export function createMockServer(world: MockWorld, storage: Storage | null = nul
 
     private dispatch(msg: ClientEnvelope) {
       const rid = typeof msg?.request_id === 'string' ? msg.request_id : undefined
+      if (TELEMETRY_TYPES.has(msg?.type)) return this.telemetry(msg)
       const spec = WS_FIELDS[msg?.type]
       if (!spec) return this.error('UNKNOWN_EVENT', 'Неизвестная команда', rid)
       const envelopeOk = Object.keys(msg).every((k) => k === 'type' || k === 'request_id' || k === 'payload')
@@ -796,6 +892,10 @@ export function createMockServer(world: MockWorld, storage: Storage | null = nul
     fetch: fetchMock,
     WebSocket: WebSocketMock,
     drop: (code) => socket?.serverClose(code),
+    clients: () => {
+      const row = socket?.metricsRow()
+      return row ? [row] : []
+    },
     patchRuntime(patch) {
       const roomId = socket?.currentRoomId
       const rt = roomId ? runtimes.get(roomId) : undefined
