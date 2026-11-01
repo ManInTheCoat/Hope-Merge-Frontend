@@ -1,8 +1,9 @@
 import * as THREE from 'three'
-import type { Room } from '../network/contract'
+import type { Room, Vec3 } from '../network/contract'
 import { closestOnBox, surfacesToColliders, type Aabb, type Bounds2, type Vec2 } from './collision'
-import { makeLabel } from './labels'
+import { disposeLabel, makeLabel } from './labels'
 import type { GalleryLook } from './galleryLook'
+import { createRuntimeView, type RuntimeView } from './runtimeView'
 import { classifySurface } from './surfaceKind'
 
 export type BuiltRoom = {
@@ -11,6 +12,8 @@ export type BuiltRoom = {
   bounds: Bounds2
   /** Гиды зала: каждый кадр поворачиваются к игроку, их таблички — к камере. */
   guides: GuideActor[]
+  /** Применение `world.runtime`: отделка, свет, гиды, стенд и лампа. */
+  runtime: RuntimeView
   /** Освобождает геометрии, материалы и текстуры. Битмапы закрывает RoomManager.unload(). */
   dispose(): void
 }
@@ -26,6 +29,10 @@ export type GuideActor = {
   update(dtS: number, player: { x: number; z: number } | null): void
   /** Кивок при начале разговора. */
   greet(): void
+  /** Новое положение и поворот (runtime заменяет базовые). */
+  place(position: Vec3, rotationY: number): void
+  /** Новая подпись над гидом. */
+  rename(displayName: string, subtitle: string): void
   dispose(): void
 }
 
@@ -42,10 +49,29 @@ function capsuleGuide(g: Room['guides'][number], labelFn: LabelFn): GuideActor {
   body.position.y = 0.73
   const head = new THREE.Mesh(new THREE.SphereGeometry(0.2, 16, 12), new THREE.MeshStandardMaterial({ color: '#e8c9a6' }))
   head.position.y = 1.55
-  const label = labelFn(g.display_name, 1.2)
-  label.position.y = 2.0
-  figure.add(body, head, label)
-  return { id: g.id, object: figure, label, update() {}, greet() {}, dispose() {} }
+  const actor: GuideActor = {
+    id: g.id,
+    object: figure,
+    label: labelFn(g.display_name, 1.2),
+    update() {},
+    greet() {},
+    place(position, rotationY) {
+      figure.position.set(position.x, position.y, position.z)
+      figure.rotation.y = rotationY
+    },
+    rename(displayName) {
+      const old = actor.label
+      actor.label = labelFn(displayName, 1.2)
+      actor.label.position.copy(old.position)
+      figure.add(actor.label)
+      figure.remove(old)
+      disposeLabel(old)
+    },
+    dispose() {},
+  }
+  actor.label.position.y = 2.0
+  figure.add(body, head, actor.label)
+  return actor
 }
 
 const DOOR_WIDTH = 1.2
@@ -109,18 +135,21 @@ export function buildRoom(
   group.name = room.id
 
   const look = opts.look
+  let ambient: THREE.HemisphereLight
   if (look) {
     // Мягкий общий свет плюс один направленный: без теней, дёшево на встроенной графике.
-    group.add(new THREE.HemisphereLight(0xffffff, 0xd9d4ca, 0.8))
+    ambient = new THREE.HemisphereLight(0xffffff, 0xd9d4ca, 0.8)
+    group.add(ambient)
     const sun = new THREE.DirectionalLight(0xfff6ea, 1.3)
     sun.position.set(3, 8, 5)
     group.add(sun)
   } else {
-    group.add(new THREE.HemisphereLight(0xffffff, 0x887766, 1.6))
-    group.add(new THREE.AmbientLight(0xffffff, 0.6))
+    ambient = new THREE.HemisphereLight(0xffffff, 0x887766, 1.6)
+    group.add(ambient, new THREE.AmbientLight(0xffffff, 0.6))
   }
 
   let hasCeiling = false
+  const walls: THREE.Mesh[] = []
   for (const s of room.surfaces) {
     const kind = classifySurface(s, room.bounds)
     if (kind === 'ceiling') hasCeiling = true
@@ -130,6 +159,7 @@ export function buildRoom(
     )
     mesh.position.set(s.position.x, s.position.y, s.position.z)
     mesh.userData = { kind: 'surface', id: s.id }
+    if (kind === 'wall') walls.push(mesh)
     group.add(mesh)
   }
 
@@ -200,12 +230,16 @@ export function buildRoom(
     group.add(actor.object)
   }
 
+  const runtime = createRuntimeView({ group, bounds: room.bounds, walls, ambient, guides, textured: !!look })
+
   return {
     group,
+    runtime,
     colliders,
     bounds: { minX: room.bounds.min.x, maxX: room.bounds.max.x, minZ: room.bounds.min.z, maxZ: room.bounds.max.z },
     guides,
     dispose() {
+      runtime.dispose()
       for (const a of guides) a.dispose()
       look?.dispose()
       group.traverse((o) => {

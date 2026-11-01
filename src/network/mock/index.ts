@@ -13,5 +13,9 @@ export async function installMocks(): Promise<void> {
   window.fetch = server.fetch
   window.WebSocket = server.WebSocket
   // Ручная проверка переподключения из консоли: __mock.drop(1012), __mock.drop(4009)…
-  ;(window as unknown as { __mock: { drop(code: number): void } }).__mock = { drop: (code) => server.drop(code) }
+  // __mock.patchRuntime({ config: { accent_color: '#6a8caf', installation_visible: true } }) — оформление зала.
+  ;(window as unknown as { __mock: Pick<typeof server, 'drop' | 'patchRuntime'> }).__mock = {
+    drop: (code) => server.drop(code),
+    patchRuntime: (patch) => server.patchRuntime(patch),
+  }
 }
