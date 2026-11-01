@@ -63,7 +63,7 @@ test('больше CHAT_THUMB_MAX миниатюр не держим: самая
   expect(t.budget.used).toBe(6 * 99)
 })
 
-test('suspend освобождает всё и не принимает новые, resume снова разрешает', async () => {
+test('suspend освобождает всё, а resume подгружает и прежние, и пришедшие за время паузы фото', async () => {
   const t = setup()
   const a = target('a')
   t.thumbs.show(a, photo('a'))
@@ -76,11 +76,22 @@ test('suspend освобождает всё и не принимает новы�
   t.thumbs.show(b, photo('b'))
   await tick()
   expect(b.url).toBeNull()
+  expect(t.budget.used).toBe(0)
   t.thumbs.resume()
-  const c = target('c')
-  t.thumbs.show(c, photo('c'))
   await tick()
-  expect(c.url).not.toBeNull()
+  expect(a.url).not.toBeNull()
+  expect(b.url).not.toBeNull()
+  expect(t.budget.used).toBe(2 * 99)
+})
+
+test('за время паузы запоминаются только последние CHAT_THUMB_MAX фото', async () => {
+  const t = setup()
+  t.thumbs.suspend()
+  const lines = ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map(target)
+  for (const l of lines) t.thumbs.show(l, photo(l.id))
+  t.thumbs.resume()
+  await tick()
+  expect(lines.map((l) => l.url !== null)).toEqual([false, true, true, true, true, true, true])
 })
 
 test('ошибка загрузки освобождает резерв и оставляет строку без картинки', async () => {

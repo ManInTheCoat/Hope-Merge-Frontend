@@ -19,13 +19,18 @@ export class ChatThumbs {
   private readonly d: ImageDeps & { onChange(): void }
   private entries: Entry[] = []
   private suspended = false
+  /** Строки, которым миниатюра положена, но на паузе (альбом открыт) её не грузили или освободили. */
+  private waiting: ChatPhoto[] = []
 
   constructor(deps: ImageDeps & { onChange(): void }) {
     this.d = deps
   }
 
   show(target: ChatPhoto, photo: Photo): void {
-    if (this.suspended) return
+    if (this.suspended) {
+      this.wait(target)
+      return
+    }
     const same = this.entries.find((e) => e.id === photo.id)
     if (same) this.drop(same)
     while (this.entries.length >= CHAT_THUMB_MAX) this.drop(this.entries[0])
@@ -55,16 +60,27 @@ export class ChatThumbs {
 
   /** Открыт альбом: его миниатюры важнее, чатовые освобождаются, новые не грузятся. */
   suspend(): void {
+    if (this.suspended) return
     this.suspended = true
+    for (const e of this.entries) this.wait(e.target)
     this.releaseAll()
   }
 
+  /** Альбом закрыт: строки, оставшиеся без миниатюры из-за паузы, загружаются заново. */
   resume(): void {
+    if (!this.suspended) return
     this.suspended = false
+    const waiting = this.waiting
+    this.waiting = []
+    for (const t of waiting) this.show(t, t.full)
   }
 
   releaseAll(): void {
     for (const e of [...this.entries]) this.drop(e)
+  }
+
+  private wait(target: ChatPhoto) {
+    this.waiting = [...this.waiting.filter((t) => t !== target), target].slice(-CHAT_THUMB_MAX)
   }
 
   private drop(e: Entry) {
