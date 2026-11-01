@@ -12,6 +12,9 @@ test('guideLook: по id, по имени без регистра, незнак�
   expect(guideLook('guide_monet', 'x')?.accessories).toContain('boater')
   expect(guideLook('g7', 'Леонардо да Винчи')?.accessories).toContain('beret')
   expect(guideLook('g8', 'ВИНСЕНТ ВАН ГОГ')).not.toBeNull()
+  // id гидов бэка
+  expect(guideLook('guide_leonardo', 'x')?.accessories).toContain('beret')
+  expect(guideLook('guide_vangogh', 'x')?.accessories).toContain('straw-wide')
   expect(guideLook('guide_herodotus', 'Геродот')).toBeNull()
 })
 

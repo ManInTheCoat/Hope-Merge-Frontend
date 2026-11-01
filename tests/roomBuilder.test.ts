@@ -205,7 +205,27 @@ test('оформление зала: материал на каждый блок
       dispose: () => void disposed++,
     },
   })
-  expect(surfaces).toBe(room.surfaces.length)
+  expect(surfaces).toBe(room.surfaces.length + 1) // + декоративный потолок
   built.dispose()
   expect(disposed).toBe(1)
+})
+
+test('без блока-потолка рисуется декоративный по bounds, без коллайдера', () => {
+  const built = buildRoom(room, new Map(), stubLabel)
+  const ceiling = built.group.children.find((o) => o.userData.id === 'ceiling') as THREE.Mesh
+  expect(ceiling).toBeDefined()
+  expect(ceiling.position.y).toBe(4)
+  expect(ceiling.userData.kind).toBe('decor')
+  expect(built.colliders.length).toBe(2)
+  const normal = new THREE.Vector3(0, 0, 1).applyQuaternion(ceiling.quaternion)
+  expect(normal.y).toBeCloseTo(-1)
+})
+
+test('блок-потолок сервера есть — декоративный не добавляется', () => {
+  const withCeiling: Room = {
+    ...room,
+    surfaces: [...room.surfaces, { id: 'ceiling', position: { x: 0, y: 4.05, z: 0 }, size: { x: 12, y: 0.1, z: 16 }, color: '#fff', collidable: false }],
+  }
+  const built = buildRoom(withCeiling, new Map(), stubLabel)
+  expect(built.group.children.some((o) => o.userData.kind === 'decor')).toBe(false)
 })

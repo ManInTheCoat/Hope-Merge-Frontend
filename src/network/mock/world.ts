@@ -128,7 +128,7 @@ export async function buildWorld(image: (label: string, hue: number) => Promise<
         exhibit('exhibit_bust', 'Бюст императора', 'Рим, I век н. э. Мрамор, копия греческого оригинала.', 'asset_bust', 0),
         exhibit('exhibit_fresco', 'Фреска из Помпей', 'I век н. э. Сад с птицами, найдена при раскопках виллы.', 'asset_fresco', 3),
       ],
-      guides: [guide('guide_da_vinci', 'Леонардо да Винчи', 'Художник и изобретатель', 3, -3)],
+      guides: [guide('guide_leonardo', 'Леонардо да Винчи', 'Художник и изобретатель', 3, -3)],
     },
     {
       id: 'hall_medieval',
@@ -143,7 +143,7 @@ export async function buildWorld(image: (label: string, hue: number) => Promise<
       ],
       guides: [
         guide('guide_monet', 'Клод Моне', 'Отец импрессионизма', -3, -3),
-        guide('guide_van_gogh', 'Винсент Ван Гог', 'Мастер цвета и мазка', 3, -3),
+        guide('guide_vangogh', 'Винсент Ван Гог', 'Мастер цвета и мазка', 3, -3),
       ],
     },
   ]

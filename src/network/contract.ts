@@ -1,4 +1,11 @@
 // Типы контракта API v1. Источник истины: api.md в корне репозитория.
+// События расширения Sunday v1 (api-sunday.md) объединены с базовыми; сами типы — в sunday.ts.
+
+import {
+  SUNDAY_SERVER_EVENT_TYPES,
+  type SundayClientEvents,
+  type SundayServerEvents,
+} from './sunday'
 
 export const API_BASE = '/api/v1'
 export const WS_PATH = '/api/v1/ws'
@@ -50,6 +57,8 @@ export type Manifest = {
   total_content_bytes: number
   client_cache_limit_bytes: number
   max_loaded_rooms: 1
+  /** Есть `sunday_v1` — сервер поддерживает расширение; нет поля — базовый API. */
+  extensions?: string[]
   photo_reserve_bytes: 3145728
   movement: {
     send_rate_hz: 10
@@ -176,11 +185,11 @@ export type ClientEvents = {
   'exhibit.inspect': { exhibit_id: string }
   'guide.ask': { guide_id: string; text: string; exhibit_id?: string }
   'guide.cancel': { generation_id: string }
-}
+} & SundayClientEvents
 
 export type ClientEventType = keyof ClientEvents
 
-/** `request_id` обязателен у всех команд, кроме `player.move`. */
+/** `request_id` обязателен у всех команд, кроме `player.move`, `client.metrics` и `telemetry.pong`. */
 export type ClientEnvelope<T extends ClientEventType = ClientEventType> = {
   [K in T]: { type: K; request_id?: string; payload: ClientEvents[K] }
 }[T]
@@ -214,7 +223,7 @@ export type ServerEvents = {
   'guide.failed': { generation: Generation }
   'guide.cancelled': { generation: Generation }
   error: ErrorBody
-}
+} & SundayServerEvents
 
 export type ServerEventType = keyof ServerEvents
 
@@ -235,6 +244,7 @@ export const SERVER_EVENT_TYPES: ReadonlySet<string> = new Set<ServerEventType>(
   'guide.failed',
   'guide.cancelled',
   'error',
+  ...SUNDAY_SERVER_EVENT_TYPES,
 ])
 
 export type ServerEnvelope<T extends ServerEventType = ServerEventType> = {

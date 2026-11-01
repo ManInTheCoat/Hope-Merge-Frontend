@@ -12,6 +12,9 @@ export type GalleryLook = {
   dispose(): void
 }
 
+/** Световое пятно не шире ~1,15 ширины картины: шире оно заходит на соседние работы. */
+export const POOL_WIDTH_FACTOR = 1.15
+
 /** Шумовая фактура: базовый цвет и мягкие пятна. */
 function noiseTexture(size: number, base: string, spots: number, alpha: number, seed: number): THREE.CanvasTexture {
   const canvas = document.createElement('canvas')
@@ -126,7 +129,7 @@ export function createGalleryLook(): GalleryLook {
         )
       }
       const pool = new THREE.Mesh(poolGeometry, poolMaterial)
-      pool.scale.set(w * 1.5, h * 1.8, 1)
+      pool.scale.set(w * POOL_WIDTH_FACTOR, h * 1.5, 1)
       pool.position.set(0, h * 0.25, -0.045)
       return pool
     },

@@ -79,6 +79,26 @@ function doorPlacement(x: number, z: number, colliders: Aabb[], center: Vec2): {
   return { point: { x, z }, normal: { x: dx / len, z: dz / len } }
 }
 
+/** Плоскость потолка на верхней границе зала, лицом вниз. */
+function decorativeCeiling(bounds: Room['bounds'], look: GalleryLook | undefined): THREE.Mesh {
+  const w = bounds.max.x - bounds.min.x
+  const d = bounds.max.z - bounds.min.z
+  const material = look
+    ? look.surface('ceiling', {
+        id: 'decor_ceiling',
+        position: { x: 0, y: bounds.max.y, z: 0 },
+        size: { x: w, y: 0, z: d },
+        color: '#fbfbfa',
+        collidable: false,
+      })
+    : new THREE.MeshStandardMaterial({ color: '#fbfbfa', roughness: 1 })
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, d), material)
+  mesh.rotation.x = Math.PI / 2 // нормаль плоскости смотрит вниз
+  mesh.position.set((bounds.min.x + bounds.max.x) / 2, bounds.max.y, (bounds.min.z + bounds.max.z) / 2)
+  mesh.userData = { kind: 'decor', id: 'ceiling' }
+  return mesh
+}
+
 export function buildRoom(
   room: Room,
   bitmaps: Map<string, ImageBitmap>,
@@ -100,15 +120,22 @@ export function buildRoom(
     group.add(new THREE.AmbientLight(0xffffff, 0.6))
   }
 
+  let hasCeiling = false
   for (const s of room.surfaces) {
+    const kind = classifySurface(s, room.bounds)
+    if (kind === 'ceiling') hasCeiling = true
     const mesh = new THREE.Mesh(
       new THREE.BoxGeometry(s.size.x, s.size.y, s.size.z),
-      look ? look.surface(classifySurface(s, room.bounds), s) : new THREE.MeshStandardMaterial({ color: s.color }),
+      look ? look.surface(kind, s) : new THREE.MeshStandardMaterial({ color: s.color }),
     )
     mesh.position.set(s.position.x, s.position.y, s.position.z)
     mesh.userData = { kind: 'surface', id: s.id }
     group.add(mesh)
   }
+
+  // В настоящих залах блока-потолка нет: рисуем декоративный по bounds. Это только картинка — не поверхность
+  // сервера, коллайдера у неё нет.
+  if (!hasCeiling) group.add(decorativeCeiling(room.bounds, look))
 
   for (const e of room.exhibits) {
     const bitmap = bitmaps.get(e.image_asset_id)
