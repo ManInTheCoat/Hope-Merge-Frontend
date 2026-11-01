@@ -60,6 +60,31 @@ export function createRuntimeView(parts: RuntimeViewParts): RuntimeView {
   let preview: { yaw: number; head_pitch: number } | null = null
   let lastRt: SundayRoomRuntime | null = null
 
+  // Метки мест для лампы: кольца на полу видны, только пока лампа в руках у самого игрока.
+  const markerGeometry = new THREE.RingGeometry(0.34, 0.44, 40)
+  const markerMaterial = new THREE.MeshBasicMaterial({ color: '#ffe9a8', transparent: true, opacity: 0.8, side: THREE.DoubleSide, depthWrite: false })
+  const markers = new THREE.Group()
+  markers.name = 'lamp_slot_markers'
+  markers.visible = false
+  group.add(markers)
+  let markerKey = ''
+  let markerT = 0
+
+  function syncMarkers(rt: SundayRoomRuntime) {
+    const key = rt.config.lamp_slots.map((sl) => `${sl.slot_id}:${sl.position.x}:${sl.position.z}`).join('|')
+    if (key !== markerKey) {
+      markerKey = key
+      markers.clear()
+      for (const sl of rt.config.lamp_slots) {
+        const ring = new THREE.Mesh(markerGeometry, markerMaterial)
+        ring.rotation.x = -Math.PI / 2
+        ring.position.set(sl.position.x, 0.03, sl.position.z)
+        markers.add(ring)
+      }
+    }
+    markers.visible = ownHeld && rt.lamp.holder_user_id !== null
+  }
+
   function applyLamp(rt: SundayRoomRuntime) {
     const slot = rt.config.lamp_slots.find((s) => s.slot_id === rt.lamp.slot_id)
     if (!slot) return
@@ -71,6 +96,7 @@ export function createRuntimeView(parts: RuntimeViewParts): RuntimeView {
     held = rt.lamp.holder_user_id !== null
     lamp.object.visible = true
     placeHeld()
+    syncMarkers(rt)
   }
 
   /** Лампа в руках стоит у игрока, иначе на своём слоте (его положение apply() уже задал). */
@@ -118,15 +144,23 @@ export function createRuntimeView(parts: RuntimeViewParts): RuntimeView {
       heldPose = pose
       ownHeld = own
       placeHeld()
+      if (lastRt) markers.visible = ownHeld && lastRt.lamp.holder_user_id !== null
     },
     setLampPreview(aim) {
       preview = aim
       if (lastRt) applyLamp(lastRt)
     },
     update(dtS) {
+      if (markers.visible) {
+        markerT += dtS
+        markerMaterial.opacity = 0.55 + 0.3 * Math.sin(markerT * 4)
+      }
       if (stand?.object.visible) stand.update(dtS)
     },
     dispose() {
+      markers.removeFromParent()
+      markerGeometry.dispose()
+      markerMaterial.dispose()
       lamp?.object.removeFromParent()
       stand?.object.removeFromParent()
       lamp?.dispose()

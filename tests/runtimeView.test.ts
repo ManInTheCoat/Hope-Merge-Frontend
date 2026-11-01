@@ -112,6 +112,21 @@ test('лампа в руках: у игрока справа и на метр в
   expect(lamp.position.x).toBe(3)
 })
 
+test('кольца мест для лампы видны, только пока лампу держит сам игрок', () => {
+  const b = built()
+  const markers = () => find(b, 'lamp_slot_markers')!
+  b.runtime.apply(fixture)
+  expect(markers().children).toHaveLength(2)
+  expect(markers().visible).toBe(false)
+  b.runtime.apply(rt((r) => ((r.revision = 2), (r.lamp.holder_user_id = 'user_1'))))
+  b.runtime.setHolderPose({ x: 5, z: 6, yaw: 0 }, false) // держит другой
+  expect(markers().visible).toBe(false)
+  b.runtime.setHolderPose({ x: 5, z: 6, yaw: 0 }, true)
+  expect(markers().visible).toBe(true)
+  b.runtime.apply(rt((r) => (r.revision = 3))) // поставили
+  expect(markers().visible).toBe(false)
+})
+
 test('лампа в руках игрока на слоте не рисуется', () => {
   const b = built()
   b.runtime.apply(rt((r) => (r.lamp.holder_user_id = 'user_1')))

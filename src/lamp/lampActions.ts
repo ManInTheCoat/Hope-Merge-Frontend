@@ -57,7 +57,7 @@ export function pickLamp(input: LookInput, rt: SundayRoomRuntime, userId: string
   return best && { target: best.target, t: best.t }
 }
 
-export const HELD_HINT = 'Лампа в руках: подойдите к месту и нажмите E, чтобы поставить'
+export const HELD_HINT = 'Лампа в руках: поставить её можно на место, отмеченное кольцом на полу (E)'
 
 /** Подсказка у лампы или слота. */
 export function lampHint(target: LampTarget): string {
