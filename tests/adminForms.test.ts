@@ -232,3 +232,8 @@ test('draftToConfig: нетронутый угол гида не округля�
   const config = draftToConfig(roomToDraft(rt), rt.config)
   expect(config.guide_placements[0].rotation_y).toBe(0.12345)
 })
+
+test('clientRow: дробный ping округляется до целых миллисекунд', () => {
+  expect(clientRow(metric({ ping_ms: 0.30000001192092896 })).ping).toBe('0 мс')
+  expect(clientRow(metric({ ping_ms: 12.6 })).ping).toBe('13 мс')
+})

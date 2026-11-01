@@ -14,6 +14,6 @@ export function clientRow(c: SundayClientMetric): ClientRow {
     name: c.display_name,
     room: c.room_id,
     fps,
-    ping: c.ping_ms === null ? '—' : `${c.ping_ms} мс`,
+    ping: c.ping_ms === null ? '—' : `${Math.round(c.ping_ms)} мс`,
   }
 }

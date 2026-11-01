@@ -822,3 +822,7 @@ canvas {
 .admin-notice[data-kind='error'] {
   background: #4a2420;
 }
+
+.admin-row input[type='checkbox'] {
+  align-self: flex-start;
+}
