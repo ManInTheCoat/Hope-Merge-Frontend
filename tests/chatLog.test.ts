@@ -24,9 +24,14 @@ test('лента хранит последние 100', () => {
   expect(log.lines.length).toBe(0)
 })
 
-test('сообщение только с фото', () => {
-  expect(chatLineText('', true)).toBe('[фото]')
-  expect(chatLineText('подпись', true)).toBe('подпись')
+test('сообщение только с фото: заглушка, пока картинки нет', () => {
+  const photo = { id: 'p', alt: '', url: null as string | null }
+  expect(chatLineText('', photo)).toBe('[фото]')
+  expect(chatLineText('подпись', photo)).toBe('подпись')
+  photo.url = 'blob:1'
+  expect(chatLineText('', photo)).toBe('')
+  expect(chatLineText('подпись', photo)).toBe('подпись')
+  expect(chatLineText('', undefined)).toBe('')
 })
 
 const ctx = { chatOpen: false, typing: false, blocked: false }

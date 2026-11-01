@@ -7,6 +7,7 @@ import { FpsMeter, startTelemetry } from './network/telemetry'
 import { fetchAdminMe } from './network/adminApi'
 import { GameSocket } from './network/ws'
 import { canvasEncoder, copyFrame, encodeUnderLimit } from './photo/frame'
+import { ChatThumbs } from './photo/chatThumbs'
 import { photoKeyAction } from './photo/keys'
 import { downloadBlob, LastPhoto } from './photo/lastPhoto'
 import { photoErrorText, savePhoto, type Shot } from './photo/save'
@@ -41,7 +42,7 @@ import { RENDER_DELAY_MS } from './players/interpolation'
 import { guideActionDoneText, guideActionErrorText } from './ui/guideAction'
 import { createChat } from './ui/chat'
 import { createControlsBar } from './ui/controlsBar'
-import { chatKeyAction, chatLineText } from './ui/chatLog'
+import { chatKeyAction } from './ui/chatLog'
 import { askErrorText, GuideAsks } from './ui/guideAsks'
 import { panelKeyAction } from './ui/guideKeys'
 import { createAdminPanel } from './ui/adminPanel'
@@ -325,6 +326,25 @@ export async function startGame(host: HTMLElement): Promise<void> {
   /** URL открытого в просмотре оригинала: нужен кнопке «Скачать». */
   let albumUrl: string | null = null
 
+  /** Миниатюры фото в чате: живут на бюджете текущей сессии, на время альбома освобождаются. */
+  let chatThumbs: ChatThumbs | null = null
+  let chatThumbsBudget: AssetBudget | null = null
+  function chatThumbsFor(budget: AssetBudget): ChatThumbs {
+    if (!chatThumbs || chatThumbsBudget !== budget) {
+      chatThumbs?.releaseAll()
+      chatThumbsBudget = budget
+      chatThumbs = new ChatThumbs({
+        budget,
+        fetchBlob: fetchPhotoBlob,
+        makeUrl: (blob) => URL.createObjectURL(blob),
+        revokeUrl: (url) => URL.revokeObjectURL(url),
+        onChange: () => chat.refresh(),
+      })
+      if (albumPanel.isOpen) chatThumbs.suspend()
+    }
+    return chatThumbs
+  }
+
   function renderAlbum(state: AlbumState) {
     albumUrl = state.kind === 'viewer' ? state.url : null
     albumPanel.render(state, {
@@ -365,6 +385,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
   function openAlbum() {
     const s = session
     if (!s?.budget || albumPanel.isOpen) return
+    chatThumbs?.suspend() // шесть миниатюр альбома не должны складываться с чатовыми (api.md §3)
     hud.showHint(null)
     controls.enabled = false
     controls.keys.clear()
@@ -387,6 +408,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
 
   /** Освободить память альбома и спрятать панель; управление не трогаем. */
   function dropAlbum() {
+    chatThumbs?.resume()
     album?.close()
     album = null
     albumUrl = null
@@ -703,6 +725,9 @@ export async function startGame(host: HTMLElement): Promise<void> {
     s.players.clear()
     view.clear()
     chat.close()
+    chatThumbs?.releaseAll()
+    chatThumbs = null
+    chatThumbsBudget = null
     if (!reconnecting) chat.clear()
     guidePanel.close()
     adminPanel.close()
@@ -1026,13 +1051,11 @@ export async function startGame(host: HTMLElement): Promise<void> {
       snapshot.players.forEach((p) => s.players.upsert(p, t0))
       socket.on('player.joined', ({ player }) => s.players.upsert(player, performance.now()))
       socket.on('player.left', ({ user_id }) => s.players.remove(user_id))
-      socket.on('chat.message', ({ author, text, photo }) =>
-        chat.add({
-          author: author.display_name,
-          color: s.players.colorOf(author.user_id),
-          text: chatLineText(text, photo !== null),
-        }),
-      )
+      socket.on('chat.message', ({ author, text, photo }) => {
+        const shot = photo ? { id: photo.id, alt: photo.caption || 'Фото', url: null as string | null } : undefined
+        chat.add({ author: author.display_name, color: s.players.colorOf(author.user_id), text, photo: shot })
+        if (shot && photo && s.budget) chatThumbsFor(s.budget).show(shot, photo)
+      })
       socket.on('guide.accepted', ({ generation }, env) => asks.accepted(env.request_id ?? '', generation))
       socket.on('guide.started', ({ generation_id }) => {
         asks.started(generation_id)
