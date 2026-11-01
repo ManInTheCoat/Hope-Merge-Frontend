@@ -13,6 +13,7 @@ import { RemotePlayersView } from './players/view'
 import { CharacterLibrary } from './characters/library'
 import { createGuideActor } from './characters/guideFigure'
 import { createGalleryLook } from './scene/galleryLook'
+import { QualityGovernor } from './scene/quality'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import { activeColliders, moveCylinder } from './scene/collision'
 import { FirstPersonControls, typingInField } from './scene/controls'
@@ -52,7 +53,16 @@ const FADE_TEXT_DELAY_MS = 400
 
 export async function startGame(host: HTMLElement): Promise<void> {
   const renderer = new THREE.WebGLRenderer({ antialias: true })
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5))
+  // Чёткость подстраивается под машину: показ идёт на чужом, возможно слабом компьютере.
+  const quality = new QualityGovernor({
+    min: 0.6,
+    max: Math.min(window.devicePixelRatio, 1.5),
+    step: 0.15,
+    lowFps: 45,
+    highFps: 58,
+    windowS: 3,
+  })
+  renderer.setPixelRatio(quality.ratio)
   renderer.shadowMap.enabled = false
   renderer.toneMapping = THREE.ACESFilmicToneMapping
   renderer.toneMappingExposure = 0.95
@@ -800,6 +810,10 @@ export async function startGame(host: HTMLElement): Promise<void> {
   let last = performance.now()
   renderer.setAnimationLoop((now) => {
     const dt = Math.min((now - last) / 1000, MAX_FRAME_DT)
+    // Длинный кадр — вкладка была скрыта или идёт загрузка зала: в замер FPS не берём.
+    const rawDt = (now - last) / 1000
+    const ratio = rawDt < 0.5 ? quality.sample(rawDt) : null
+    if (ratio !== null) renderer.setPixelRatio(ratio)
     last = now
     const s = session
 
