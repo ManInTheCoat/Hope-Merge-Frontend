@@ -27,13 +27,13 @@ const LOOKS: { ids: string[]; names: string[]; look: GuideLook }[] = [
     look: { model: 'character-male-b', outfit: null, accessories: ['boater'], accent: '#5f9ea0' },
   },
   {
-    ids: ['guide_da_vinci', 'guide_leonardo'],
+    ids: ['guide_leonardo'],
     names: ['леонардо', 'винчи'],
     // Та же бородатая модель, но тёмный берет и красно-коричневая одежда.
     look: { model: 'character-male-b', outfit: '#a0522d', accessories: ['beret'], accent: '#b8863b' },
   },
   {
-    ids: ['guide_van_gogh'],
+    ids: ['guide_vangogh'],
     names: ['ван гог'],
     // Рыжие волосы модели male-d и соломенная шляпа.
     look: { model: 'character-male-d', outfit: null, accessories: ['straw-wide'], accent: '#e0b020' },

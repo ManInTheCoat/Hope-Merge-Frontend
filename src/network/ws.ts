@@ -9,6 +9,7 @@ import {
   type ServerEventType,
   type ServerEvents,
 } from './contract'
+import { SUNDAY_NO_REQUEST_ID } from './sunday'
 import { uuidV4 } from './uuid'
 
 const SNAPSHOT_TIMEOUT_MS = 15_000
@@ -88,15 +89,15 @@ export class GameSocket {
     return () => this.closeHandlers.delete(handler)
   }
 
-  /** Возвращает request_id отправленной команды; null, если сокет закрыт или команда без request_id (`player.move`). */
+  /** Возвращает request_id отправленной команды; null, если сокет закрыт или команда без request_id (`player.move`, `client.metrics`, `telemetry.pong`). */
   send<K extends ClientEventType>(type: K, payload: ClientEvents[K]): string | null {
     if (!this.isOpen) return null
-    const request_id = type === 'player.move' ? undefined : uuidV4()
+    const request_id = type === 'player.move' || SUNDAY_NO_REQUEST_ID.has(type) ? undefined : uuidV4()
     this.ws.send(JSON.stringify({ type, ...(request_id ? { request_id } : {}), payload }))
     return request_id ?? null
   }
 
-  request<K extends Exclude<ClientEventType, 'player.move'>, R extends ServerEventType>(
+  request<K extends Exclude<ClientEventType, 'player.move' | 'client.metrics' | 'telemetry.pong'>, R extends ServerEventType>(
     type: K,
     payload: ClientEvents[K],
     response: R,
