@@ -68,6 +68,13 @@ export function createGuidePanel(root: HTMLElement, opts: GuidePanelOptions): Gu
   cancelBtn.type = 'button'
   cancelBtn.textContent = 'Отменить'
 
+  // Просьба изменить экспозицию — отдельная команда, а не вопрос: переключатель режима того же поля ввода.
+  const actToggle = el('button', 'guide-act-toggle', box)
+  actToggle.type = 'button'
+  actToggle.textContent = 'Изменить экспозицию'
+  actToggle.hidden = true
+  actToggle.setAttribute('aria-pressed', 'false')
+
   const form = el('form', 'guide-form', box)
   const input = el('input', 'guide-input', form)
   input.maxLength = GUIDE_MAX_LEN * 2 // maxlength считает UTF-16; точный предел — в validateGuideText
@@ -78,23 +85,6 @@ export function createGuidePanel(root: HTMLElement, opts: GuidePanelOptions): Gu
   sendBtn.textContent = 'Спросить'
   const meta = el('div', 'guide-meta', box)
 
-  // Просьба изменить экспозицию — отдельная команда, а не вопрос: свой переключатель, поле и ответ.
-  const actToggle = el('button', 'guide-act-toggle', box)
-  actToggle.type = 'button'
-  actToggle.textContent = 'Изменить экспозицию'
-  actToggle.hidden = true
-  const actForm = el('form', 'guide-form guide-act-form', box)
-  actForm.hidden = true
-  const actInput = el('input', 'guide-input', actForm)
-  actInput.maxLength = GUIDE_ACTION_MAX_LEN * 2 // maxlength считает UTF-16; точный предел — в validateGuideAction
-  actInput.placeholder = `Например: ${GUIDE_ACTION_EXAMPLES[0]}`
-  actInput.autocomplete = 'off'
-  const actSend = el('button', 'guide-send', actForm)
-  actSend.type = 'submit'
-  actSend.textContent = 'Попросить'
-  const actStatus = el('div', 'guide-meta guide-act-status', box)
-  actStatus.hidden = true
-
   let guide: Guide | null = null
   let history: Generation[] = []
   let nextBefore: string | null = null
@@ -103,9 +93,14 @@ export function createGuidePanel(root: HTMLElement, opts: GuidePanelOptions): Gu
   /** Номер открытия: ответ на загрузку из прошлого открытия (или другого гида) не трогает текущее. */
   let openId = 0
   let error = ''
+  /** Режим поля: вопрос гиду или просьба изменить экспозицию. */
+  let actMode = false
+  /** Просьбы этого открытия панели: показываются в ленте как реплики, но в историю диалога не попадают. */
+  let acts: Array<{ guideId: string; question: string; answer: string; note: string; pending: boolean; failed: boolean }> = []
 
   function updateMeta() {
-    meta.textContent = inputMeta(input.value, GUIDE_MAX_LEN, COUNTER_FROM, error)
+    const max = actMode ? GUIDE_ACTION_MAX_LEN : GUIDE_MAX_LEN
+    meta.textContent = inputMeta(input.value, max, actMode ? max - 40 : COUNTER_FROM, error)
     meta.classList.toggle('guide-meta--error', !!error)
     meta.hidden = !meta.textContent
   }
@@ -155,6 +150,16 @@ export function createGuidePanel(root: HTMLElement, opts: GuidePanelOptions): Gu
         rows.push(n)
       }
     }
+    for (const a of acts.filter((x) => x.guideId === guide!.id)) {
+      const q = document.createElement('div')
+      q.className = 'guide-q guide-q--act'
+      q.textContent = a.question
+      rows.push(q)
+      const r = document.createElement('div')
+      r.className = a.failed ? 'guide-note' : 'guide-a guide-a--act'
+      r.textContent = a.pending ? 'Меняем…' : a.failed ? a.note : a.answer
+      rows.push(r)
+    }
     logEl.replaceChildren(...rows)
     if (atBottom) logEl.scrollTop = logEl.scrollHeight
 
@@ -162,7 +167,7 @@ export function createGuidePanel(root: HTMLElement, opts: GuidePanelOptions): Gu
     statusEl.hidden = !status
     statusText.textContent = status?.text ?? ''
     cancelBtn.disabled = !status?.canCancel
-    const busy = asks.active !== null
+    const busy = actMode ? acts.some((x) => x.pending) : asks.active !== null
     const wasBusy = input.disabled
     input.disabled = busy
     sendBtn.disabled = busy
@@ -212,17 +217,17 @@ export function createGuidePanel(root: HTMLElement, opts: GuidePanelOptions): Gu
     logEl.scrollTop = logEl.scrollHeight - fromBottom
   }
 
-  function setActStatus(text: string, isError: boolean) {
-    actStatus.textContent = text
-    actStatus.hidden = !text
-    actStatus.classList.toggle('guide-meta--error', isError)
-  }
-
-  function setActOpen(open: boolean) {
-    actForm.hidden = !open
-    if (!open) setActStatus('', false)
-    if (open) actInput.focus()
-    else if (document.activeElement === actInput) input.focus()
+  function setMode(act: boolean) {
+    actMode = act
+    actToggle.setAttribute('aria-pressed', String(act))
+    actToggle.classList.toggle('guide-act-toggle--on', act)
+    input.maxLength = (act ? GUIDE_ACTION_MAX_LEN : GUIDE_MAX_LEN) * 2
+    input.placeholder = act ? `Попросите гида, например: ${GUIDE_ACTION_EXAMPLES[0]}` : 'Спросите гида…'
+    sendBtn.textContent = act ? 'Попросить' : 'Спросить'
+    error = ''
+    updateMeta()
+    render()
+    if (!input.disabled) input.focus()
   }
 
   function close() {
@@ -231,10 +236,9 @@ export function createGuidePanel(root: HTMLElement, opts: GuidePanelOptions): Gu
     openId++
     box.hidden = true
     input.blur()
-    actInput.blur()
-    actInput.value = ''
-    actForm.hidden = true
-    setActStatus('', false)
+    input.value = ''
+    acts = []
+    setMode(false)
   }
 
   asks.onChange(render)
@@ -245,7 +249,9 @@ export function createGuidePanel(root: HTMLElement, opts: GuidePanelOptions): Gu
 
   form.addEventListener('submit', (e) => {
     e.preventDefault()
-    if (!guide || asks.active) return
+    if (!guide) return
+    if (actMode) return void submitAct()
+    if (asks.active) return
     const raw = input.value
     const text = validateGuideText(raw)
     if (text === null) return setError(trimWs(raw) ? `Не больше ${GUIDE_MAX_LEN} символов` : '')
@@ -257,28 +263,31 @@ export function createGuidePanel(root: HTMLElement, opts: GuidePanelOptions): Gu
   })
   input.addEventListener('input', () => updateMeta())
 
-  actToggle.addEventListener('click', () => setActOpen(actForm.hidden === true))
-  actForm.addEventListener('submit', async (e) => {
-    e.preventDefault()
-    if (!guide || actSend.disabled) return
-    const text = validateGuideAction(actInput.value)
-    if (text === null) return setActStatus(`От 1 до ${GUIDE_ACTION_MAX_LEN} символов`, true)
+  actToggle.addEventListener('click', () => setMode(!actMode))
+
+  async function submitAct() {
+    if (!guide || acts.some((x) => x.pending)) return
+    const g = guide
+    const text = validateGuideAction(input.value)
+    if (text === null) return setError(trimWs(input.value) ? `Не больше ${GUIDE_ACTION_MAX_LEN} символов` : '')
+    const entry = { guideId: g.id, question: text, answer: '', note: '', pending: true, failed: false }
+    acts.push(entry)
+    input.value = ''
+    setError('')
+    render()
+    logEl.scrollTop = logEl.scrollHeight
     const openedFor = openId
-    actSend.disabled = actInput.disabled = true
-    setActStatus('Отправляем…', false)
     try {
-      const done = await opts.onAct(guide, text)
-      if (openedFor !== openId) return
-      actInput.value = ''
-      setActStatus(done, false)
+      entry.answer = await opts.onAct(g, text)
     } catch (err) {
-      if (openedFor !== openId) return
-      setActStatus(err instanceof Error ? err.message : String(err), true)
-    } finally {
-      actSend.disabled = actInput.disabled = false
-      if (openedFor === openId && !actForm.hidden) actInput.focus()
+      entry.failed = true
+      entry.note = err instanceof Error ? err.message : String(err)
     }
-  })
+    entry.pending = false
+    if (openedFor !== openId) return
+    render()
+    logEl.scrollTop = logEl.scrollHeight
+  }
 
   cancelBtn.addEventListener('click', async () => {
     asks.setCancelling(true)
@@ -295,7 +304,7 @@ export function createGuidePanel(root: HTMLElement, opts: GuidePanelOptions): Gu
     // Клавиши панели не должны доходить до игры и общего чата.
     e.stopPropagation()
     if (e.repeat) return
-    if (!panelKeyAction(e.code, { typing: e.target === input || e.target === actInput, inputDisabled: input.disabled, opening: false })) return
+    if (!panelKeyAction(e.code, { typing: e.target === input, inputDisabled: input.disabled, opening: false })) return
     e.preventDefault()
     close()
     opts.onClose()
@@ -321,8 +330,6 @@ export function createGuidePanel(root: HTMLElement, opts: GuidePanelOptions): Gu
       subtitleEl.hidden = !g.subtitle
       box.hidden = false
       actToggle.hidden = !opts.canAct()
-      actForm.hidden = true
-      setActStatus('', false)
       updateMeta()
       void loadFirst()
       if (!input.disabled) input.focus()

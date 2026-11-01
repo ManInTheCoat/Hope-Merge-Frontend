@@ -497,6 +497,17 @@ canvas {
   cursor: pointer;
 }
 
+.guide-act-toggle--on {
+  background: #f4efe6;
+  color: #1a1a1f;
+  border-color: #f4efe6;
+}
+
+.guide-q--act::before {
+  content: 'Просьба · ';
+  opacity: 0.6;
+}
+
 .guide-meta {
   font-size: 12px;
   opacity: 0.8;

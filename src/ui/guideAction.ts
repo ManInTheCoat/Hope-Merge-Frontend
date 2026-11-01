@@ -16,10 +16,10 @@ export const GUIDE_ACTION_HINT = `Гид понимает такие прось�
 export type GuideEffect = SundayServerEvents['guide.action.completed']['effect']
 
 const EFFECT_TEXT: Record<GuideEffect, string> = {
-  show_installation: 'Макет показан',
-  hide_installation: 'Макет убран',
-  warm_light: 'Освещение стало теплее',
-  cool_light: 'Освещение стало холоднее',
+  show_installation: 'Готово: в зале появился учебный макет — стенд «Цвет и свет»',
+  hide_installation: 'Готово: макет убран из зала',
+  warm_light: 'Готово: освещение стало теплее',
+  cool_light: 'Готово: освещение стало холоднее',
 }
 
 /** Ответ игроку после `guide.action.completed`. */

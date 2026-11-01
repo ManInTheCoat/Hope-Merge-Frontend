@@ -28,8 +28,8 @@ test('прочие отказы — человеческие тексты без
 })
 
 test('ответ по эффекту', () => {
-  expect(guideActionDoneText('show_installation')).toBe('Макет показан')
-  expect(guideActionDoneText('cool_light')).toBe('Освещение стало холоднее')
+  expect(guideActionDoneText('show_installation')).toContain('учебный макет')
+  expect(guideActionDoneText('cool_light')).toContain('холоднее')
   expect(guideActionDoneText('что-то новое')).toBe('Готово')
 })
 
