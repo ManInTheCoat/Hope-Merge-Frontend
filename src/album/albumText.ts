@@ -9,9 +9,9 @@ export function shareBlockReason(ctx: { ready: boolean; socketOpen: boolean }): 
   return ctx.ready && ctx.socketOpen ? null : 'Отправка в чат доступна, когда игра подключена'
 }
 
-export function photoMeta(photo: Photo, timeZone?: string): { caption: string; room: string; date: string } {
+export function photoMeta(photo: Photo, timeZone?: string): { room: string; date: string } {
   const date = new Intl.DateTimeFormat('ru-RU', { dateStyle: 'medium', timeStyle: 'short', timeZone }).format(new Date(photo.created_at))
-  return { caption: photo.caption || 'Без подписи', room: photo.room_id, date }
+  return { room: photo.room_id, date }
 }
 
 export function albumFileName(photo: Photo): string {

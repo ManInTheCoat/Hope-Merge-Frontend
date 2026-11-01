@@ -1064,7 +1064,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
       socket.on('player.joined', ({ player }) => s.players.upsert(player, performance.now()))
       socket.on('player.left', ({ user_id }) => s.players.remove(user_id))
       socket.on('chat.message', ({ author, text, photo }) => {
-        const shot = photo ? { id: photo.id, alt: photo.caption || 'Фото', url: null as string | null, full: photo } : undefined
+        const shot = photo ? { id: photo.id, alt: 'Фото', url: null as string | null, full: photo } : undefined
         chat.add({ author: author.display_name, color: s.players.colorOf(author.user_id), text, photo: shot })
         if (shot && photo && s.budget) chatThumbsFor(s.budget).show(shot, photo)
       })

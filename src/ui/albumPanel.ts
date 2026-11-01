@@ -73,7 +73,7 @@ export function createAlbumPanel(root: HTMLElement, h: AlbumPanelHandlers): Albu
       if (url) {
         const img = el('img', 'album-thumb', cell)
         img.src = url
-        img.alt = p.caption || 'Фото'
+        img.alt = 'Фото'
       } else el('div', 'album-thumb album-thumb--empty', cell).textContent = s.busy ? '…' : '—'
       cell.addEventListener('click', () => h.onView(p.id))
     }
@@ -96,11 +96,10 @@ export function createAlbumPanel(root: HTMLElement, h: AlbumPanelHandlers): Albu
     if (s.url) {
       const img = el('img', 'album-photo', body)
       img.src = s.url
-      img.alt = s.photo.caption || 'Фото'
+      img.alt = 'Фото'
     } else el('div', 'album-empty', body).textContent = 'Загрузка…'
 
     const meta = photoMeta(s.photo)
-    el('div', 'album-caption', body).textContent = meta.caption
     el('div', 'album-meta', body).textContent = `${meta.room} · ${meta.date}`
 
     const actions = el('div', 'album-actions', body)

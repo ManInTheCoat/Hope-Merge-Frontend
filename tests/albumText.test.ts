@@ -18,13 +18,11 @@ const photo = (caption = ''): Photo => ({
   created_at: '2026-11-01T10:05:00Z',
 })
 
-test('photoMeta: пустая подпись заменяется, зал и дата показываются', () => {
+test('photoMeta: зал и дата, без подписи (клиент её не задаёт и не редактирует)', () => {
   const m = photoMeta(photo(), 'UTC')
-  expect(m.caption).toBe('Без подписи')
-  expect(m.room).toBe('hall_antiquity')
+  expect(m).toEqual({ room: 'hall_antiquity', date: m.date })
   expect(m.date).toContain('10:05')
   expect(m.date).toContain('2026')
-  expect(photoMeta(photo('Ваза'), 'UTC').caption).toBe('Ваза')
 })
 
 test('shareBlockReason: причина, пока игра не готова или сокет закрыт', () => {
