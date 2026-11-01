@@ -11,6 +11,7 @@ import type {
 import { codePoints, trimWs } from '../../ui/text'
 import { mockValidPose } from './geometry'
 import { WORLD_VERSION, type MockWorld } from './world'
+import { NPC_MAX } from '../../npc/limits'
 
 export type AdminFail = { ok: false; status: number; code: string; message: string; fields?: Record<string, string> }
 export type AdminResult<T> = { ok: true; value: T } | AdminFail
@@ -99,8 +100,8 @@ export function createAdminState(world: MockWorld, runtimes: Map<string, SundayR
     if (config.lighting !== 'neutral' && config.lighting !== 'warm' && config.lighting !== 'cool') {
       errors.lighting = 'neutral, warm или cool'
     }
-    if (!Number.isInteger(config.npc_count) || (config.npc_count as number) < 0 || (config.npc_count as number) > 40) {
-      errors.npc_count = 'Целое число от 0 до 40'
+    if (!Number.isInteger(config.npc_count) || (config.npc_count as number) < 0 || (config.npc_count as number) > NPC_MAX) {
+      errors.npc_count = `Целое число от 0 до ${NPC_MAX}`
     }
     if (typeof config.installation_visible !== 'boolean') errors.installation_visible = 'Нужно true или false'
 

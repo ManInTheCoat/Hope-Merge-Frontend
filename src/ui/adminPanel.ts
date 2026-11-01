@@ -15,6 +15,7 @@ import type { SundayAdminGuide, SundayConfigLighting, SundayRoomRuntime } from '
 import { el } from './dom'
 import { userErrorText } from './errorText'
 import { inputMeta } from './text'
+import { NPC_MAX } from '../npc/limits'
 
 const POLL_MS = 2000
 const TABS = [
@@ -201,7 +202,7 @@ export function createAdminPanel(root: HTMLElement, opts: { onClose(): void }): 
 
     const npc = textInput(draft.npc_count)
     npc.inputMode = 'numeric'
-    kit.row('Посетителей (0–40)', npc, 'npc_count')
+    kit.row(`Посетителей (0–${NPC_MAX})`, npc, 'npc_count')
 
     const installation = document.createElement('input')
     installation.type = 'checkbox'

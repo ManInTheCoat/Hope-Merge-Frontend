@@ -138,7 +138,7 @@ const runtime: SundayRoomRuntime = {
       { slot_id: 'a', position: { x: 3, y: 0, z: 4 } },
       { slot_id: 'b', position: { x: 9, y: 0, z: 4 } },
     ],
-    npc_count: 12,
+    npc_count: 7,
     installation_visible: true,
   },
   guides: [],
@@ -148,7 +148,7 @@ const runtime: SundayRoomRuntime = {
 test('roomToDraft: радианы в градусы, числа как строки', () => {
   const d = roomToDraft(runtime)
   expect(d.guides).toEqual([{ guide_id: 'guide_x', x: '3', z: '-3', rotation_deg: '90' }])
-  expect(d.npc_count).toBe('12')
+  expect(d.npc_count).toBe('7')
   expect(d.lighting).toBe('warm')
 })
 
@@ -157,7 +157,7 @@ test('draftToConfig: круговой переход сохраняет мест
   expect(config.lamp_slots).toEqual(runtime.config.lamp_slots)
   expect(config.guide_placements[0].guide_id).toBe('guide_x')
   expect(config.guide_placements[0].rotation_y).toBeCloseTo(Math.PI / 2, 6)
-  expect(config.npc_count).toBe(12)
+  expect(config.npc_count).toBe(7)
   expect(config.installation_visible).toBe(true)
 })
 
@@ -179,12 +179,12 @@ test('нули валидны и остаются нулями (x=0, npc_count=0
   expect(config.guide_placements[0].position.x).toBe(0)
 })
 
-test('validateRoomDraft: npc_count — целое 0–40', () => {
-  for (const bad of ['41', '-1', '2.5', '', 'abc']) {
+test('validateRoomDraft: npc_count — целое 0–10', () => {
+  for (const bad of ['11', '-1', '2.5', '', 'abc']) {
     const d = { ...roomToDraft(runtime), npc_count: bad }
     expect(validateRoomDraft(d).npc_count).toBeDefined()
   }
-  expect(validateRoomDraft({ ...roomToDraft(runtime), npc_count: '40' }).npc_count).toBeUndefined()
+  expect(validateRoomDraft({ ...roomToDraft(runtime), npc_count: '10' }).npc_count).toBeUndefined()
 })
 
 test('validateRoomDraft: цвет только #RRGGBB, поля гида по ключу guide.<id>.<поле>', () => {

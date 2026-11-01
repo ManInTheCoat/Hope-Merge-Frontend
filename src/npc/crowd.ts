@@ -2,11 +2,11 @@ import * as THREE from 'three'
 import type { SundayNPCState } from '../network/sunday'
 import { headYaw, limbSwing, STRIDE_RAD_PER_M } from './gait'
 import { BODY, partTransforms, type PartName } from './layout'
+import { NPC_MAX } from './limits'
 import { NpcBuffers, type NpcPose } from './npcBuffer'
 
 /** Не дальше этого от NPC игрок считается собеседником при `talking` (api-sunday.md §5: 3 м). */
 const TALK_RANGE_M = 3
-const MAX_NPC = 40
 
 export type Crowd = {
   /** Применяет полный снимок npc.state (отсутствующие NPC удаляются). */
@@ -24,7 +24,7 @@ const TROUSERS = ['#2b2f3a', '#3a3a3a', '#4a3b2c', '#26364a']
 const numberOf = (id: string) => Number(/(\d+)$/.exec(id)?.[1] ?? 0)
 
 /** Один набор общих геометрий и материалов, по `InstancedMesh` на часть тела. Без теней, текстур и имён. */
-export function createCrowd(parent: THREE.Object3D, maxCount = MAX_NPC): Crowd {
+export function createCrowd(parent: THREE.Object3D, maxCount = NPC_MAX): Crowd {
   const geoms = {
     head: new THREE.SphereGeometry(BODY.headRadius, 12, 8),
     torso: new THREE.BoxGeometry(BODY.torsoWidth, BODY.torsoHeight, BODY.torsoDepth),

@@ -14,12 +14,12 @@ async function joined() {
 const npcStates = (inbox: Env[]) => inbox.filter((e) => e.type === 'npc.state')
 const payload = (e: Env) => e.payload as unknown as NpcState
 
-test('после snapshot и world.runtime приходит npc.state с 40 NPC, seq = 1', async () => {
+test('после snapshot и world.runtime приходит npc.state с 10 NPC, seq = 1', async () => {
   const j = await joined()
   expect(j.inbox.map((e) => e.type).slice(0, 3)).toEqual(['world.snapshot', 'world.runtime', 'npc.state'])
   const first = payload(npcStates(j.inbox)[0])
   expect(first.seq).toBe(1)
-  expect(first.npcs).toHaveLength(40)
+  expect(first.npcs).toHaveLength(10)
   expect(first.room_id).toBe(j.snapshot.self.room_id)
   j.ws.close()
 })

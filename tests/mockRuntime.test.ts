@@ -23,7 +23,7 @@ test('world.runtime идёт сразу за snapshot и описывает те
   const rt = runtimes(j.inbox)[0].payload as Record<string, any>
   expect(rt.room_id).toBe(j.snapshot.self.room_id)
   expect(rt.revision).toBe(1)
-  expect(rt.config).toMatchObject({ accent_color: '#D9D2C3', lighting: 'neutral', npc_count: 40, installation_visible: false })
+  expect(rt.config).toMatchObject({ accent_color: '#D9D2C3', lighting: 'neutral', npc_count: 10, installation_visible: false })
   expect(rt.config.lamp_slots.map((s: { slot_id: string }) => s.slot_id)).toEqual(['a', 'b'])
   expect(rt.lamp).toEqual({ object_id: 'lamp_01', slot_id: 'a', holder_user_id: null, yaw: 0, head_pitch: 0, on: true })
   expect(rt.guides.map((g: { guide_id: string }) => g.guide_id)).toEqual(['guide_leonardo'])

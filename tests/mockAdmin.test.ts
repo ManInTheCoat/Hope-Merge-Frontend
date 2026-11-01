@@ -79,7 +79,7 @@ test('PUT зала: невалидный конфиг — 400 с полем, rev
   const { put, roomId, roomBody, room } = await setup()
   const rt = await room()
   const cases: Array<[string, Json]> = [
-    ['npc_count', { npc_count: 41 }],
+    ['npc_count', { npc_count: 11 }],
     ['lighting', { lighting: 'red' }],
     ['accent_color', { accent_color: 'red' }],
     ['guide_placements', { guide_placements: [] }],
