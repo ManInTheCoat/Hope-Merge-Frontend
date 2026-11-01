@@ -10,6 +10,11 @@ import { downloadBlob, LastPhoto } from './photo/lastPhoto'
 import { photoErrorText, savePhoto, type Shot } from './photo/save'
 import { PlayerRegistry } from './players/registry'
 import { RemotePlayersView } from './players/view'
+import { CharacterLibrary } from './characters/library'
+import { createGuideActor } from './characters/guideFigure'
+import { createGalleryLook } from './scene/galleryLook'
+import { QualityGovernor } from './scene/quality'
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import { activeColliders, moveCylinder } from './scene/collision'
 import { FirstPersonControls, typingInField } from './scene/controls'
 import { CLIENT_SPEED_FACTOR, moveSendBudget, moveVector, shouldSendMove } from './scene/input'
@@ -48,12 +53,28 @@ const FADE_TEXT_DELAY_MS = 400
 
 export async function startGame(host: HTMLElement): Promise<void> {
   const renderer = new THREE.WebGLRenderer({ antialias: true })
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5))
+  // Чёткость подстраивается под машину: показ идёт на чужом, возможно слабом компьютере.
+  const quality = new QualityGovernor({
+    min: Math.min(0.6, window.devicePixelRatio),
+    max: Math.min(window.devicePixelRatio, 1.5),
+    step: 0.15,
+    lowFps: 45,
+    highFps: 58,
+    windowS: 3,
+  })
+  renderer.setPixelRatio(quality.ratio)
   renderer.shadowMap.enabled = false
+  renderer.toneMapping = THREE.ACESFilmicToneMapping
+  renderer.toneMappingExposure = 0.95
   host.appendChild(renderer.domElement)
 
   const scene = new THREE.Scene()
   scene.background = new THREE.Color(0x1a1a1f)
+  // Окружение для мягких отражений на бетоне и рамах: генерируется кодом один раз за сеанс страницы.
+  const pmrem = new THREE.PMREMGenerator(renderer)
+  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture
+  scene.environmentIntensity = 0.5
+  pmrem.dispose()
   const camera = new THREE.PerspectiveCamera(70, 1, 0.1, 100)
   camera.rotation.order = 'YXZ'
 
@@ -80,6 +101,16 @@ export async function startGame(host: HTMLElement): Promise<void> {
   let doorTarget: Door | null = null
 
   const view = new RemotePlayersView(scene)
+  /** Модели персонажей грузятся параллельно со входом; до загрузки (или при ошибке) — капсулы. */
+  let characters: CharacterLibrary | null = null
+  /** Зал строится только после этой загрузки, иначе гиды первого зала остались бы капсулами. Не отклоняется. */
+  const charactersReady = CharacterLibrary.load().then(
+    (lib) => {
+      characters = lib
+      view.setLibrary(lib)
+    },
+    (err) => console.warn('Модели персонажей не загрузились', err),
+  )
 
   const controls = new FirstPersonControls(renderer.domElement, (locked) => {
     const s = session
@@ -186,6 +217,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
   function openGuide(s: Session, guide: Guide) {
     sendMove(s, true) // серверная позиция должна быть свежей, иначе у границы 3 м придёт OUT_OF_RANGE
     hud.showHint(null)
+    s.built?.guides.find((a) => a.id === guide.id)?.greet()
     controls.enabled = false
     controls.keys.clear()
     hud.showClickOverlay(false)
@@ -515,7 +547,10 @@ export async function startGame(host: HTMLElement): Promise<void> {
   }
 
   function showRoom(s: Session, loaded: LoadedRoom) {
-    s.built = buildRoom(loaded.room, loaded.bitmaps)
+    s.built = buildRoom(loaded.room, loaded.bitmaps, undefined, {
+      guideFactory: characters ? createGuideActor(characters) : undefined,
+      look: createGalleryLook(),
+    })
     s.moveWorld = {
       colliders: activeColliders(s.built.colliders, s.manifest?.movement.player_height_m ?? 1.8),
       bounds: s.built.bounds,
@@ -589,6 +624,7 @@ export async function startGame(host: HTMLElement): Promise<void> {
     const slow = setTimeout(() => hud.fadeText(`Переход: ${door.label}…`), FADE_TEXT_DELAY_MS)
     try {
       const loaded = await manager.load(current_room, s.ac.signal)
+      await charactersReady
       if (!alive()) return
       showRoom(s, loaded)
       await socket.request('world.ready', { world_version: manifest.world_version, movement_epoch: s.epoch }, 'world.ready')
@@ -714,6 +750,8 @@ export async function startGame(host: HTMLElement): Promise<void> {
 
       rooms = makeRooms(snapshot.world_version, s.budget)
       const loaded = await rooms.load(snapshot.current_room, s.ac.signal)
+      await charactersReady
+      s.ac.signal.throwIfAborted()
       showRoom(s, loaded)
       if (!old && returningEntry) hud.showLoading({ kind: 'loading', text: `Возвращаемся в зал «${loaded.room.title}»…` })
       applySelf(s, snapshot.self, controls)
@@ -776,6 +814,10 @@ export async function startGame(host: HTMLElement): Promise<void> {
   let last = performance.now()
   renderer.setAnimationLoop((now) => {
     const dt = Math.min((now - last) / 1000, MAX_FRAME_DT)
+    // Длинный кадр — вкладка была скрыта или идёт загрузка зала: в замер FPS не берём.
+    const rawDt = (now - last) / 1000
+    const ratio = rawDt < 0.5 ? quality.sample(rawDt) : null
+    if (ratio !== null) renderer.setPixelRatio(ratio)
     last = now
     const s = session
 
@@ -821,7 +863,9 @@ export async function startGame(host: HTMLElement): Promise<void> {
       }
       if (s.roomId) view.update(s.players, s.roomId, now, camera)
       // Табличка — дочерний узел повёрнутой фигуры гида: мировой поворот к камере задаём через родителя.
-      for (const label of s.built.guideLabels) {
+      for (const actor of s.built.guides) {
+        actor.update(dt, s.path.sent)
+        const label = actor.label
         label.parent!.getWorldQuaternion(labelParentQ)
         label.quaternion.copy(labelParentQ.invert().multiply(camera.quaternion))
       }

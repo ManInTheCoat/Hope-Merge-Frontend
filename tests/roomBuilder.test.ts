@@ -167,5 +167,45 @@ test('таблички гидов отдаются наружу, чтобы по
     ...room,
     guides: [{ id: 'g', display_name: 'Гид', subtitle: '', position: { x: 0, y: 0, z: 0 }, rotation_y: 0, interaction_radius_m: 3 }],
   }
-  expect(buildRoom(r, new Map(), stubLabel).guideLabels.length).toBe(1)
+  expect(buildRoom(r, new Map(), stubLabel).guides.length).toBe(1)
+})
+
+test('фигурки гидов строит фабрика и освобождает dispose()', () => {
+  const r: Room = {
+    ...room,
+    guides: [
+      { id: 'g1', display_name: 'Клод Моне', subtitle: '', position: { x: 0, y: 0, z: 0 }, rotation_y: 0, interaction_radius_m: 3 },
+      { id: 'g2', display_name: 'Ван Гог', subtitle: '', position: { x: 2, y: 0, z: 0 }, rotation_y: 0, interaction_radius_m: 3 },
+    ],
+  }
+  const disposed: string[] = []
+  const built = buildRoom(r, new Map(), stubLabel, {
+    guideFactory: (g) => ({
+      id: g.id,
+      object: new THREE.Group(),
+      label: new THREE.Group(),
+      update() {},
+      greet() {},
+      dispose: () => disposed.push(g.id),
+    }),
+  })
+  expect(built.guides.map((a) => a.id)).toEqual(['g1', 'g2'])
+  built.dispose()
+  expect(disposed).toEqual(['g1', 'g2'])
+})
+
+test('оформление зала: материал на каждый блок, dispose() освобождает оформление', () => {
+  let surfaces = 0
+  let disposed = 0
+  const built = buildRoom(room, new Map(), stubLabel, {
+    look: {
+      surface: () => (surfaces++, new THREE.MeshBasicMaterial()),
+      exhibitFrame: () => new THREE.Group(),
+      lightPool: () => null,
+      dispose: () => void disposed++,
+    },
+  })
+  expect(surfaces).toBe(room.surfaces.length)
+  built.dispose()
+  expect(disposed).toBe(1)
 })
