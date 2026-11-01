@@ -2,8 +2,8 @@ import * as THREE from 'three'
 import { canvasTexture } from './canvasTexture'
 import { HAND_BASE, handPose } from './handPose'
 
-/** Лампа в правой руке относительно камеры игрока (м). */
-const LAMP_HAND = { x: 0.19, y: -0.2, z: -0.5 }
+/** Лампа в левой руке относительно камеры игрока (м). */
+const LAMP_HAND = { x: -0.19, y: -0.2, z: -0.5 }
 
 /** Размеры корпуса, м. */
 const BODY = { w: 0.13, h: 0.082, d: 0.046 }
@@ -235,11 +235,11 @@ export class HandCamera {
     model.add(lug)
 
     // Аппарат чуть повёрнут к центру, чтобы был виден объектив.
-    model.rotation.set(0.1, -0.3, 0.05)
+    model.rotation.set(0.1, 0.3, -0.05)
     this.rig.add(model)
     this.scene.add(this.rig)
 
-    // Лампа в правой руке: ручка и раструб с линзой, смотрит вперёд-вниз, как её свет в зале.
+    // Лампа в левой руке: ручка и раструб с линзой, смотрит вперёд-вниз, как её свет в зале.
     const metal = new THREE.MeshStandardMaterial({ color: '#3a3a3f', roughness: 0.45, metalness: 0.5 })
     const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.019, 0.17, 16), metal)
     handle.position.set(0, -0.06, 0.05)
@@ -284,7 +284,7 @@ export class HandCamera {
     this.rig.position.set(p.x, p.y, p.z)
     this.rig.rotation.set(p.pitch, 0, p.roll)
     this.shutter.position.y = BODY.h / 2 + 0.015 - p.shutter * 0.003
-    // Лампа справа, фотоаппарат слева; при ходьбе лампа покачивается вместе с ним.
+    // Лампа слева, фотоаппарат справа; при ходьбе лампа покачивается вместе с ним.
     this.lampRig.position.set(LAMP_HAND.x, LAMP_HAND.y + (p.y - HAND_BASE.y) * 0.6, LAMP_HAND.z)
   }
 
